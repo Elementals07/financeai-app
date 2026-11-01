@@ -6,9 +6,9 @@ const ExpenseList = ({ expenses = [], onEdit, onDelete, deletingId, onCancelDele
 
     if (loading) {
         return (
-            <div className="card" style={{ padding: '1.5rem' }}>
+            <div className="card" style={{ padding: '1rem' }}>
                 {[...Array(5)].map((_, i) => (
-                    <div key={i} className="loading-skeleton" style={{ height: '48px', marginBottom: '0.75rem', borderRadius: 'var(--radius-sm)' }} />
+                    <div key={i} className="loading-skeleton" style={{ height: '56px', marginBottom: '0.75rem', borderRadius: 'var(--radius-md)' }} />
                 ))}
             </div>
         );
@@ -28,17 +28,17 @@ const ExpenseList = ({ expenses = [], onEdit, onDelete, deletingId, onCancelDele
 
     const formatDate = (dateStr) => {
         const d = new Date(dateStr);
-        return d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+        return d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
     };
 
     const formatCurrency = (val) => {
-        return '₹' + parseFloat(val || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 });
+        return '₹' + parseFloat(val || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 });
     };
 
     return (
         <div className="table-card">
-            {/* Desktop Table View */}
-            <div className="table-responsive" style={{ display: 'block' }}>
+            {/* Desktop Table View (>= 768px) */}
+            <div className="table-responsive desktop-only-table">
                 <table className="data-table">
                     <thead>
                         <tr>
@@ -86,50 +86,47 @@ const ExpenseList = ({ expenses = [], onEdit, onDelete, deletingId, onCancelDele
 
                             return (
                                 <tr key={exp.id}>
-                                    <td style={{ color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>
+                                    <td style={{ color: 'var(--text-secondary)' }}>
                                         {formatDate(exp.date)}
                                     </td>
                                     <td>
-                                        <span className="category-badge">
-                                            <span 
-                                                className="category-dot" 
-                                                style={{ backgroundColor: catColor }} 
-                                                aria-hidden="true" 
-                                            />
+                                        <span
+                                            className="category-pill"
+                                            style={{
+                                                borderColor: catColor,
+                                                color: catColor,
+                                                backgroundColor: `${catColor}12`
+                                            }}
+                                        >
+                                            <span className="category-pill-dot" style={{ backgroundColor: catColor }} />
                                             {exp.category}
                                         </span>
                                     </td>
-                                    <td>
-                                        <span style={{ fontWeight: 500, color: 'var(--text-primary)' }}>
-                                            {exp.description || <span style={{ color: 'var(--text-muted)' }}>—</span>}
-                                        </span>
+                                    <td style={{ color: 'var(--text-primary)', fontWeight: 500 }}>
+                                        {exp.description || '—'}
                                     </td>
-                                    <td style={{ textAlign: 'right', fontWeight: 700, color: 'var(--text-primary)' }} className="num">
-                                        {formatCurrency(exp.amount)}
+                                    <td style={{ textAlign: 'right', fontWeight: 700, color: '#9B1C1C' }} className="num">
+                                        -{formatCurrency(exp.amount)}
                                     </td>
                                     <td style={{ textAlign: 'right' }}>
-                                        <div style={{ display: 'inline-flex', gap: '0.35rem', justifyContent: 'flex-end' }}>
+                                        <div style={{ display: 'inline-flex', gap: '0.375rem', justifyContent: 'flex-end' }}>
                                             <button
                                                 type="button"
-                                                className="btn btn-outline btn-sm"
+                                                className="btn btn-ghost btn-sm"
                                                 onClick={() => onEdit(exp)}
-                                                title="Edit this expense"
-                                                aria-label={`Edit expense ${exp.description || exp.category}`}
-                                                style={{ minHeight: '36px', padding: '0 8px' }}
+                                                aria-label={`Edit ${exp.description || exp.category}`}
+                                                style={{ minHeight: '32px', minWidth: '32px', padding: '0 8px' }}
                                             >
                                                 <HiOutlinePencilSquare aria-hidden="true" />
-                                                <span>Edit</span>
                                             </button>
                                             <button
                                                 type="button"
-                                                className="btn btn-danger-outline btn-sm"
+                                                className="btn btn-ghost btn-sm"
                                                 onClick={() => onStartDelete(exp.id)}
-                                                title="Delete this expense"
-                                                aria-label={`Delete expense ${exp.description || exp.category}`}
-                                                style={{ minHeight: '36px', padding: '0 8px' }}
+                                                aria-label={`Delete ${exp.description || exp.category}`}
+                                                style={{ minHeight: '32px', minWidth: '32px', padding: '0 8px', color: 'var(--color-danger)' }}
                                             >
                                                 <HiOutlineTrash aria-hidden="true" />
-                                                <span>Delete</span>
                                             </button>
                                         </div>
                                     </td>
@@ -138,6 +135,85 @@ const ExpenseList = ({ expenses = [], onEdit, onDelete, deletingId, onCancelDele
                         })}
                     </tbody>
                 </table>
+            </div>
+
+            {/* Mobile Touch-Friendly Card List (< 768px) */}
+            <div className="mobile-expense-list">
+                {expenses.map((exp) => {
+                    const isDeleting = deletingId === exp.id;
+                    const catColor = colorMap[exp.category] || 'var(--color-primary)';
+
+                    if (isDeleting) {
+                        return (
+                            <div key={exp.id} className="mobile-expense-item deleting">
+                                <div className="mobile-delete-confirm">
+                                    <p className="delete-title">Delete {exp.description || exp.category} ({formatCurrency(exp.amount)})?</p>
+                                    <div className="delete-actions">
+                                        <button 
+                                            type="button" 
+                                            className="btn btn-danger btn-sm"
+                                            onClick={() => onDelete(exp.id)}
+                                        >
+                                            <HiOutlineCheck aria-hidden="true" /> Yes
+                                        </button>
+                                        <button 
+                                            type="button" 
+                                            className="btn btn-outline btn-sm"
+                                            onClick={onCancelDelete}
+                                        >
+                                            <HiOutlineXMark aria-hidden="true" /> Cancel
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        );
+                    }
+
+                    return (
+                        <div key={exp.id} className="mobile-expense-item" onClick={() => onEdit(exp)}>
+                            <div 
+                                className="mobile-expense-cat-icon"
+                                style={{ 
+                                    backgroundColor: `${catColor}18`, 
+                                    color: catColor 
+                                }}
+                            >
+                                <HiOutlineTag aria-hidden="true" />
+                            </div>
+
+                            <div className="mobile-expense-info">
+                                <div className="mobile-expense-desc">
+                                    {exp.description || exp.category}
+                                </div>
+                                <div className="mobile-expense-meta">
+                                    <span 
+                                        className="mobile-cat-badge"
+                                        style={{ color: catColor, backgroundColor: `${catColor}14` }}
+                                    >
+                                        {exp.category}
+                                    </span>
+                                    <span className="mobile-expense-date">{formatDate(exp.date)}</span>
+                                </div>
+                            </div>
+
+                            <div className="mobile-expense-amount-col">
+                                <div className="mobile-expense-amount num">
+                                    -{formatCurrency(exp.amount)}
+                                </div>
+                                <div className="mobile-item-actions" onClick={(e) => e.stopPropagation()}>
+                                    <button
+                                        type="button"
+                                        className="mobile-action-btn delete"
+                                        onClick={() => onStartDelete(exp.id)}
+                                        aria-label="Delete expense"
+                                    >
+                                        <HiOutlineTrash />
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    );
+                })}
             </div>
         </div>
     );

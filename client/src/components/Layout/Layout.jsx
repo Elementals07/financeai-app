@@ -1,11 +1,13 @@
 import { useState, useEffect } from 'react';
-import { Outlet, Link } from 'react-router-dom';
+import { Outlet, Link, useNavigate } from 'react-router-dom';
 import Sidebar from './Sidebar';
-import { HiOutlineBars3, HiOutlineSparkles } from 'react-icons/hi2';
+import BottomNav from './BottomNav';
+import { HiOutlineBars3, HiOutlineSparkles, HiOutlineArrowRightOnRectangle } from 'react-icons/hi2';
 import { useAuth } from '../../context/AuthContext';
 
 const Layout = () => {
-    const { user } = useAuth();
+    const { user, logout } = useAuth();
+    const navigate = useNavigate();
     const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
         try { 
             return localStorage.getItem('sidebar-collapsed') === 'true'; 
@@ -28,18 +30,8 @@ const Layout = () => {
 
     return (
         <div className="app-layout">
-            {/* Mobile Header Bar (visible on narrow screens < 900px) */}
+            {/* Mobile Native App Bar */}
             <header className="mobile-header" role="banner">
-                <button 
-                    type="button" 
-                    className="mobile-menu-btn" 
-                    onClick={() => setMobileOpen(true)}
-                    aria-label="Open navigation menu"
-                    aria-expanded={mobileOpen}
-                >
-                    <HiOutlineBars3 aria-hidden="true" />
-                </button>
-
                 <div className="mobile-brand">
                     <div className="mobile-brand-icon" aria-hidden="true">
                         <HiOutlineSparkles />
@@ -47,8 +39,17 @@ const Layout = () => {
                     <span className="mobile-brand-text">FinanceAI</span>
                 </div>
 
-                <div className="mobile-avatar" title={user?.name || 'User'} aria-label={`Logged in as ${user?.name || 'User'}`}>
-                    {getInitials(user?.name)}
+                <div className="mobile-header-actions">
+                    <button 
+                        type="button" 
+                        className="mobile-avatar-btn" 
+                        onClick={() => setMobileOpen(true)}
+                        aria-label="Open menu and settings"
+                    >
+                        <div className="mobile-avatar" title={user?.name || 'User'}>
+                            {getInitials(user?.name)}
+                        </div>
+                    </button>
                 </div>
             </header>
 
@@ -56,12 +57,12 @@ const Layout = () => {
             {mobileOpen && (
                 <div 
                     className="mobile-overlay" 
-                    onClick={() => setMobileOpen(false)}
+                    onClick={() => setMobileOpen(false)} 
                     aria-hidden="true" 
                 />
             )}
 
-            {/* Sidebar Component */}
+            {/* Sidebar / More Drawer */}
             <Sidebar 
                 mobileOpen={mobileOpen} 
                 onCloseMobile={() => setMobileOpen(false)} 
@@ -77,6 +78,9 @@ const Layout = () => {
                     <Outlet />
                 </div>
             </main>
+
+            {/* Native Mobile Bottom Navigation Bar */}
+            <BottomNav />
         </div>
     );
 };

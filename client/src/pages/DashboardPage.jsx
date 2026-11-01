@@ -122,38 +122,29 @@ const DashboardPage = () => {
             {/* Header: Greeting, Month Selector & Fast Add Expense Action */}
             <div className="page-header">
                 <div className="page-header-row">
-                    <div>
+                    <div className="page-header-greeting">
                         <div className="page-tag">
                             <span style={{ width: '6px', height: '6px', borderRadius: '50%', backgroundColor: 'var(--color-primary)' }} />
-                            Everyday Ledger Overview
+                            Everyday Ledger
                         </div>
                         <h1 className="page-title">
                             {getGreeting()}, {firstName}
                         </h1>
                         <p className="page-subtitle">
-                            Here is where your money stands for {new Date(currentMonth + '-01').toLocaleDateString('en-IN', { month: 'long', year: 'numeric' })}.
+                            Overview for {new Date(currentMonth + '-01').toLocaleDateString('en-IN', { month: 'long', year: 'numeric' })}
                         </p>
                     </div>
 
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+                    <div className="page-header-controls">
                         {/* Month Selector */}
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: 'var(--bg-surface)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', padding: '0.25rem 0.5rem' }}>
-                            <HiOutlineCalendar aria-hidden="true" style={{ color: 'var(--text-secondary)', fontSize: '1.1rem' }} />
+                        <div className="month-selector-pill">
+                            <HiOutlineCalendar aria-hidden="true" className="calendar-icon" />
                             <label htmlFor="period-select" className="sr-only">Select Period</label>
                             <select 
                                 id="period-select"
                                 value={currentMonth} 
                                 onChange={handleMonthChange}
-                                className="form-select"
-                                style={{ 
-                                    padding: '0.35rem 0.75rem', 
-                                    border: 'none', 
-                                    background: 'transparent',
-                                    fontSize: '0.875rem',
-                                    fontWeight: 600,
-                                    color: 'var(--text-primary)',
-                                    minHeight: '36px'
-                                }}
+                                className="form-select month-select"
                             >
                                 {generateMonthOptions().map(opt => (
                                     <option key={opt.val} value={opt.val}>{opt.label}</option>
@@ -164,12 +155,12 @@ const DashboardPage = () => {
                         {/* Fast Add Expense Action Button */}
                         <button 
                             type="button"
-                            className="btn btn-primary"
+                            className="btn btn-primary add-expense-top-btn"
                             onClick={() => setShowAddModal(true)}
                             aria-label="Add a new expense"
                         >
                             <HiOutlinePlus aria-hidden="true" />
-                            Add Expense
+                            <span>Add Expense</span>
                         </button>
                     </div>
                 </div>
@@ -320,6 +311,16 @@ const DashboardPage = () => {
                     onClose={() => setShowAddModal(false)}
                 />
             )}
+
+            {/* Mobile Floating Action Button (FAB) */}
+            <button
+                type="button"
+                className="mobile-fab"
+                onClick={() => setShowAddModal(true)}
+                aria-label="Add new expense"
+            >
+                <HiOutlinePlus aria-hidden="true" />
+            </button>
         </div>
     );
 };

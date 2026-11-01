@@ -163,35 +163,37 @@ const ExpensesPage = () => {
             </div>
 
             {/* Compact Filter Area */}
-            <div className="card" style={{ marginBottom: '1.5rem', padding: '1rem 1.25rem' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
-                    {/* Time Filter Pills */}
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem', alignItems: 'center' }}>
-                        <span style={{ fontSize: '0.8125rem', fontWeight: 600, color: 'var(--text-secondary)', marginRight: '0.25rem', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
-                            <HiOutlineFunnel aria-hidden="true" /> Period:
+            <div className="card filter-card" style={{ marginBottom: '1.25rem', padding: '0.875rem 1rem' }}>
+                <div className="filter-controls-wrapper">
+                    {/* Time Filter Scrollable Strip on Mobile */}
+                    <div className="time-filter-strip">
+                        <span className="filter-label">
+                            <HiOutlineFunnel aria-hidden="true" />
                         </span>
-                        {TIME_FILTERS.map(tf => (
-                            <button
-                                key={tf}
-                                type="button"
-                                onClick={() => setTimeFilter(tf)}
-                                className={`btn btn-sm ${timeFilter === tf ? 'btn-primary' : 'btn-outline'}`}
-                                style={{ minHeight: '34px', padding: '0 10px', fontSize: '0.8125rem' }}
-                            >
-                                {tf}
-                            </button>
-                        ))}
+                        <div className="filter-scroll-strip">
+                            {TIME_FILTERS.map(tf => (
+                                <button
+                                    key={tf}
+                                    type="button"
+                                    onClick={() => setTimeFilter(tf)}
+                                    className={`btn btn-sm ${timeFilter === tf ? 'btn-primary' : 'btn-outline'}`}
+                                    style={{ minHeight: '34px', padding: '0 12px', fontSize: '0.8125rem', whiteSpace: 'nowrap', flexShrink: 0 }}
+                                >
+                                    {tf}
+                                </button>
+                            ))}
+                        </div>
                     </div>
 
                     {/* Secondary Filters: Month / Date / Category */}
-                    <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                    <div className="secondary-filters-row">
                         {timeFilter === 'This Month' && (
                             <input
                                 type="month"
                                 value={filterMonth}
                                 onChange={(e) => setFilterMonth(e.target.value)}
                                 className="form-input"
-                                style={{ minHeight: '36px', padding: '0.25rem 0.5rem', fontSize: '0.85rem', width: 'auto' }}
+                                style={{ minHeight: '36px', padding: '0.25rem 0.5rem', fontSize: '0.85rem', flex: 1 }}
                                 aria-label="Select month filter"
                             />
                         )}
@@ -202,7 +204,7 @@ const ExpensesPage = () => {
                                 value={specificDate}
                                 onChange={(e) => setSpecificDate(e.target.value)}
                                 className="form-input"
-                                style={{ minHeight: '36px', padding: '0.25rem 0.5rem', fontSize: '0.85rem', width: 'auto' }}
+                                style={{ minHeight: '36px', padding: '0.25rem 0.5rem', fontSize: '0.85rem', flex: 1 }}
                                 aria-label="Select specific date filter"
                             />
                         )}
@@ -211,7 +213,7 @@ const ExpensesPage = () => {
                             value={filterCategory}
                             onChange={(e) => setFilterCategory(e.target.value)}
                             className="form-select"
-                            style={{ minHeight: '36px', padding: '0.25rem 0.75rem', fontSize: '0.85rem', width: 'auto' }}
+                            style={{ minHeight: '36px', padding: '0.25rem 0.75rem', fontSize: '0.85rem', flex: 1 }}
                             aria-label="Filter by category"
                         >
                             <option value="All">All Categories</option>
@@ -225,10 +227,10 @@ const ExpensesPage = () => {
                 {/* Subtotal callout for currently filtered view */}
                 <div style={{ marginTop: '0.75rem', paddingTop: '0.75rem', borderTop: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.85rem' }}>
                     <span style={{ color: 'var(--text-secondary)' }}>
-                        Showing <strong>{expenses.length}</strong> {expenses.length === 1 ? 'expense' : 'expenses'}
+                        <strong>{expenses.length}</strong> {expenses.length === 1 ? 'item' : 'items'}
                     </span>
                     <span style={{ color: 'var(--text-primary)' }}>
-                        Total in this view: <strong className="num" style={{ color: 'var(--color-primary)', fontSize: '1rem' }}>₹{totalFilteredAmount.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</strong>
+                        Total: <strong className="num" style={{ color: '#9B1C1C', fontSize: '1.05rem', fontWeight: 700 }}>₹{totalFilteredAmount.toLocaleString('en-IN', { maximumFractionDigits: 0 })}</strong>
                     </span>
                 </div>
             </div>
@@ -275,6 +277,28 @@ const ExpensesPage = () => {
                     onSuccess={() => fetchExpenses(1, false)}
                 />
             )}
+
+            {/* Mobile Floating Action Buttons */}
+            <div className="mobile-fab-group">
+                <button
+                    type="button"
+                    className="mobile-fab mobile-fab-secondary"
+                    onClick={() => setShowScanner(true)}
+                    aria-label="Scan bill"
+                    title="Scan Bill"
+                >
+                    <HiOutlineCamera aria-hidden="true" />
+                </button>
+                <button
+                    type="button"
+                    className="mobile-fab mobile-fab-primary"
+                    onClick={() => { setEditExpense(null); setShowForm(true); }}
+                    aria-label="Add new expense"
+                    title="Add Expense"
+                >
+                    <HiOutlinePlus aria-hidden="true" />
+                </button>
+            </div>
         </div>
     );
 };
