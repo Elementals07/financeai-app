@@ -42,22 +42,11 @@ const SpendingPieChart = ({ categoryBreakdown = [] }) => {
 
     const options = {
         responsive: true,
-        maintainAspectRatio: false,
+        maintainAspectRatio: true,
         cutout: '62%',
-        layout: {
-            padding: { top: 0, bottom: 4, left: 0, right: 0 }
-        },
         plugins: {
             legend: {
-                position: 'bottom',
-                align: 'center',
-                labels: {
-                    color: '#252D29',
-                    font: { family: '"DM Sans", sans-serif', size: 12, weight: '500' },
-                    padding: 10,
-                    usePointStyle: true,
-                    pointStyleWidth: 8
-                }
+                display: false
             },
             tooltip: {
                 backgroundColor: '#252D29',
@@ -88,9 +77,21 @@ const SpendingPieChart = ({ categoryBreakdown = [] }) => {
                     <p className="card-subtitle">Spending breakdown by category this month</p>
                 </div>
             </div>
-            {/* Chart area — responsive height, perfectly centered */}
-            <div style={{ position: 'relative', width: '100%', height: '280px', marginTop: '0.5rem', display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
-                <Doughnut data={data} options={options} />
+            {/* Chart canvas in fixed centered square */}
+            <div style={{ width: '100%', display: 'flex', justifyContent: 'center', marginTop: '0.75rem', marginBottom: '0.75rem' }}>
+                <div style={{ width: '220px', height: '220px', position: 'relative' }}>
+                    <Doughnut data={data} options={options} />
+                </div>
+            </div>
+
+            {/* Custom centered HTML chips legend */}
+            <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'center', gap: '8px', padding: '0 4px' }}>
+                {categoryBreakdown.map(c => (
+                    <div key={c.category} style={{ display: 'inline-flex', alignItems: 'center', gap: '5px', fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-secondary)' }}>
+                        <span style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: colorMap[c.category] || '#69736C', flexShrink: 0 }} />
+                        <span>{c.category}</span>
+                    </div>
+                ))}
             </div>
 
             {/* Accessible screen-reader & visual summary list */}

@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { Line } from 'react-chartjs-2';
 import {
     Chart as ChartJS,
@@ -13,6 +14,8 @@ import {
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Filler, Tooltip, Legend);
 
 const DailyExpenseChart = ({ dailySpending = [], currentMonth }) => {
+    const [zoomView, setZoomView] = useState('all'); // 'all', '14d', '7d'
+
     const getDaysInMonth = () => {
         if (!currentMonth) return [];
         const [year, month] = currentMonth.split('-').map(Number);
@@ -26,7 +29,12 @@ const DailyExpenseChart = ({ dailySpending = [], currentMonth }) => {
         return days;
     };
 
-    const allDays = getDaysInMonth();
+    let allDays = getDaysInMonth();
+    if (zoomView === '7d') {
+        allDays = allDays.slice(-7);
+    } else if (zoomView === '14d') {
+        allDays = allDays.slice(-14);
+    }
     
     const spendingMap = dailySpending.reduce((acc, curr) => {
         acc[curr.day] = curr.total;
@@ -121,16 +129,66 @@ const DailyExpenseChart = ({ dailySpending = [], currentMonth }) => {
 
     return (
         <div className="card">
-            {/* Heading stays fixed above the scrollable chart area */}
-            <div className="card-header">
+            {/* Heading + Zoom toggles */}
+            <div className="card-header" style={{ alignItems: 'flex-start' }}>
                 <div>
                     <h2 className="card-title">Daily Spending Pattern</h2>
                     <p className="card-subtitle">Day-by-day spending spikes and activity</p>
                 </div>
+                <div style={{ display: 'flex', gap: '4px', background: 'var(--bg-surface-subtle)', padding: '2px', borderRadius: 'var(--radius-full)', border: '1px solid var(--border-color)' }}>
+                    <button
+                        type="button"
+                        onClick={() => setZoomView('7d')}
+                        style={{
+                            padding: '2px 8px',
+                            fontSize: '0.6875rem',
+                            fontWeight: 700,
+                            borderRadius: 'var(--radius-full)',
+                            background: zoomView === '7d' ? 'var(--color-primary)' : 'transparent',
+                            color: zoomView === '7d' ? '#FFFFFF' : 'var(--text-secondary)',
+                            border: 'none',
+                            cursor: 'pointer'
+                        }}
+                    >
+                        7D
+                    </button>
+                    <button
+                        type="button"
+                        onClick={() => setZoomView('14d')}
+                        style={{
+                            padding: '2px 8px',
+                            fontSize: '0.6875rem',
+                            fontWeight: 700,
+                            borderRadius: 'var(--radius-full)',
+                            background: zoomView === '14d' ? 'var(--color-primary)' : 'transparent',
+                            color: zoomView === '14d' ? '#FFFFFF' : 'var(--text-secondary)',
+                            border: 'none',
+                            cursor: 'pointer'
+                        }}
+                    >
+                        14D
+                    </button>
+                    <button
+                        type="button"
+                        onClick={() => setZoomView('all')}
+                        style={{
+                            padding: '2px 8px',
+                            fontSize: '0.6875rem',
+                            fontWeight: 700,
+                            borderRadius: 'var(--radius-full)',
+                            background: zoomView === 'all' ? 'var(--color-primary)' : 'transparent',
+                            color: zoomView === 'all' ? '#FFFFFF' : 'var(--text-secondary)',
+                            border: 'none',
+                            cursor: 'pointer'
+                        }}
+                    >
+                        Month
+                    </button>
+                </div>
             </div>
-            {/* Horizontally scrollable on narrow screens — heading stays above */}
+            {/* Horizontally scrollable on narrow screens */}
             <div className="chart-scroll-x" style={{ marginTop: '0.5rem' }}>
-                <div style={{ minWidth: `${Math.max(320, labels.length * 22)}px`, height: '240px', position: 'relative' }}>
+                <div style={{ minWidth: zoomView === 'all' ? `${Math.max(320, labels.length * 20)}px` : '100%', height: '230px', position: 'relative' }}>
                     <Line data={data} options={options} />
                 </div>
             </div>
