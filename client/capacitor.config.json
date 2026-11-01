@@ -1,0 +1,17 @@
+{
+  "appId": "com.elementals.financeai",
+  "appName": "FinanceAI",
+  "webDir": "dist",
+  "server": {
+    "androidScheme": "https"
+  },
+  "plugins": {
+    "Camera": {
+      "permissionsType": "prompt"
+    },
+    "StatusBar": {
+      "backgroundColor": "#2D3FBF",
+      "style": "DARK"
+    }
+  }
+}

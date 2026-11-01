@@ -1,0 +1,90 @@
+name: Build and Release Standalone Android APK
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+          cache-dependency-path: client/package-lock.json
+
+      - name: Set up Java JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: Ensure Android SDK Licenses
+        run: |
+          mkdir -p "$ANDROID_HOME/licenses" || true
+          echo -e "\n8933bad161af4178b1185d1a37fbf41ea5269c55\nd56f5187479451eabf01fb78af6dfcb131a6481e\n24333f8a63b682449dd4133f4f891319e2e0dd9c" > "$ANDROID_HOME/licenses/android-sdk-license"
+          echo -e "\n84831b9409646a918e30573bab4c9c91346d8abd" > "$ANDROID_HOME/licenses/android-sdk-preview-license"
+          yes | sdkmanager --licenses || true
+
+      - name: Build Web Bundle
+        working-directory: ./client
+        run: |
+          npm install
+          npm run build
+          npx cap sync android
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Grant Execute Permission for Gradlew
+        working-directory: ./client/android
+        run: chmod +x gradlew
+
+      - name: Build Debug APK
+        working-directory: ./client/android
+        run: ./gradlew assembleDebug --no-daemon --stacktrace
+
+      - name: Prepare APK Release Artifact
+        run: |
+          mkdir -p apk
+          cp client/android/app/build/outputs/apk/debug/app-debug.apk apk/FinanceAI.apk
+
+      - name: Upload APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: FinanceAI-Standalone-APK
+          path: apk/FinanceAI.apk
+
+      - name: Create or Update GitHub Release
+        uses: softprops/action-gh-release@v2
+        if: github.ref == 'refs/heads/main'
+        with:
+          tag_name: v1.0.0
+          name: "FinanceAI Mobile v1.0.0 (100% Standalone - Zero PC Dependency)"
+          draft: false
+          prerelease: false
+          token: ${{ secrets.GITHUB_TOKEN }}
+          body: |
+            ### 📱 FinanceAI Autonomous Mobile App v1.0.0
+
+            **100% Standalone Mobile Finance App — Zero PC or Node.js Dependency:**
+            - 💾 **On-Device Dexie / IndexedDB**: All expenses, budgets, categories, and historical data stored locally.
+            - 📊 **Local Analytics Engine**: Monthly summaries, category baselines, micro-leakage detection, and multi-year trend calculations run 100% on-device.
+            - 🤖 **Direct-to-Gemini REST**: Calls Google Gemini APIs directly over HTTPS with automatic 5-key rotation fallback.
+            - 📸 **Native Receipt Scanner**: Instant receipt scanning via device camera or gallery powered by Gemini Vision OCR.
+            - 🎨 **Unified Design System**: Retains the polished Indigo (`#2D3FBF`) and Teal (`#0EA5C9`) design system with mobile safe-areas.
+            
+            **Direct Download:**
+            - Tap `FinanceAI.apk` under **Assets** below to download and install.
+          files: |
+            apk/FinanceAI.apk
