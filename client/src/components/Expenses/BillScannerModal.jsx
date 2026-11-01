@@ -219,9 +219,9 @@ const BillScannerModal = ({ onClose, onSuccess }) => {
 
     return (
         <div className="modal-overlay" onClick={onClose} role="dialog" aria-modal="true" aria-labelledby="scanner-modal-title">
-            <div className="modal" style={{ maxWidth: '620px' }} onClick={(e) => e.stopPropagation()}>
+            <div className="modal" style={{ maxWidth: '620px', display: 'flex', flexDirection: 'column', maxHeight: '88vh', overflow: 'hidden' }} onClick={(e) => e.stopPropagation()}>
                 {/* Header */}
-                <div className="modal-header">
+                <div className="modal-header" style={{ flexShrink: 0 }}>
                     <div>
                         <h2 id="scanner-modal-title" className="modal-title">
                             Scan Bill or Receipt
@@ -235,7 +235,7 @@ const BillScannerModal = ({ onClose, onSuccess }) => {
                     </button>
                 </div>
 
-                <div className="modal-body">
+                <div className="modal-body" style={{ flex: 1, overflowY: 'auto', padding: '1.25rem 1.5rem' }}>
                     {/* STEP 1: Upload or Photograph */}
                     {step === 1 && (
                         <div style={{ textAlign: 'center', padding: '1.5rem 1rem' }}>
@@ -464,9 +464,9 @@ const BillScannerModal = ({ onClose, onSuccess }) => {
                     )}
                 </div>
 
-                {/* Footer Buttons */}
-                <div className="modal-footer">
-                    <button type="button" className="btn btn-outline" onClick={onClose} disabled={saving}>
+                {/* Sticky Footer Buttons — Always Visible */}
+                <div className="modal-footer" style={{ flexShrink: 0, display: 'flex', gap: '0.75rem', justifyContent: 'flex-end' }}>
+                    <button type="button" className="btn btn-outline" onClick={onClose} disabled={saving} style={{ flex: step === 2 ? 1 : 'none' }}>
                         Cancel
                     </button>
                     {step === 2 && (
@@ -475,6 +475,7 @@ const BillScannerModal = ({ onClose, onSuccess }) => {
                             className="btn btn-primary"
                             onClick={handleSave}
                             disabled={saving}
+                            style={{ flex: 2 }}
                         >
                             {saving ? 'Recording...' : 'Confirm & Save Expense'}
                         </button>

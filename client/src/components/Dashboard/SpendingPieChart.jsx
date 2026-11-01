@@ -43,16 +43,20 @@ const SpendingPieChart = ({ categoryBreakdown = [] }) => {
     const options = {
         responsive: true,
         maintainAspectRatio: false,
-        cutout: '64%',
+        cutout: '62%',
+        layout: {
+            padding: { top: 0, bottom: 4, left: 0, right: 0 }
+        },
         plugins: {
             legend: {
-                position: 'right',
+                position: 'bottom',
+                align: 'center',
                 labels: {
                     color: '#252D29',
-                    font: { family: '"DM Sans", sans-serif', size: 13, weight: '500' },
-                    padding: 12,
+                    font: { family: '"DM Sans", sans-serif', size: 12, weight: '500' },
+                    padding: 10,
                     usePointStyle: true,
-                    pointStyleWidth: 10
+                    pointStyleWidth: 8
                 }
             },
             tooltip: {
@@ -84,8 +88,8 @@ const SpendingPieChart = ({ categoryBreakdown = [] }) => {
                     <p className="card-subtitle">Spending breakdown by category this month</p>
                 </div>
             </div>
-            {/* Chart area — responsive height, no overflow clipping */}
-            <div style={{ position: 'relative', width: '100%', height: '260px', marginTop: '0.5rem' }}>
+            {/* Chart area — responsive height, perfectly centered */}
+            <div style={{ position: 'relative', width: '100%', height: '280px', marginTop: '0.5rem', display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
                 <Doughnut data={data} options={options} />
             </div>
 

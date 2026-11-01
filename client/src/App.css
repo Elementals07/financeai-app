@@ -804,7 +804,7 @@
   align-items: center;
   justify-content: center;
   padding: var(--space-4);
-  z-index: var(--z-modal);
+  z-index: 2500;
   backdrop-filter: blur(2px);
 }
 
@@ -1357,8 +1357,8 @@
     justify-content: space-between;
     width: 100%;
     box-sizing: border-box;
-    height: calc(56px + max(env(safe-area-inset-top, 0px), 8px));
-    padding-top: max(env(safe-area-inset-top, 0px), 8px);
+    height: 52px;
+    padding-top: 0;
     padding-left: var(--space-4);
     padding-right: var(--space-4);
     background-color: var(--bg-surface);
@@ -1544,23 +1544,30 @@
 
   /* Page Header Streamlined on Mobile */
   .page-header {
-    margin-bottom: var(--space-4);
+    margin-bottom: var(--space-3);
+  }
+
+  .page-tag {
+    margin-bottom: 2px;
+    font-size: 0.7rem;
+    padding: 1px 8px;
   }
 
   .page-header-row {
     flex-direction: column;
     align-items: stretch;
-    gap: var(--space-2);
+    gap: var(--space-1);
   }
 
   .page-title {
-    font-size: 1.5rem;
-    line-height: 1.25;
+    font-size: 1.25rem;
+    line-height: 1.2;
+    margin-bottom: 2px;
   }
 
   .page-subtitle {
-    font-size: 0.8125rem;
-    margin-top: 2px;
+    font-size: 0.781rem;
+    margin-top: 0;
   }
 
   .page-header-controls {
@@ -1772,29 +1779,44 @@
   .modal-overlay {
     align-items: flex-end;
     padding: 0;
+    z-index: 2500;
   }
 
   .modal {
     width: 100%;
     max-width: 100% !important;
     border-radius: 20px 20px 0 0;
-    max-height: 85vh;
+    max-height: 88vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
     border-bottom: none;
-    box-shadow: 0 -8px 30px rgba(17, 24, 39, 0.2);
+    box-shadow: 0 -8px 30px rgba(17, 24, 39, 0.25);
     animation: slideUpModal 0.25s cubic-bezier(0.16, 1, 0.3, 1);
   }
 
   .modal-header {
+    flex-shrink: 0;
     padding: var(--space-4) var(--space-5);
+    border-bottom: 1px solid var(--border-color);
   }
 
   .modal-body {
     padding: var(--space-4) var(--space-5);
+    flex: 1;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
   }
 
   .modal-footer {
+    flex-shrink: 0;
+    position: sticky;
+    bottom: 0;
+    background-color: var(--bg-surface);
+    border-top: 1px solid var(--border-color);
     padding: var(--space-3) var(--space-5);
-    padding-bottom: calc(var(--space-3) + env(safe-area-inset-bottom, 0px));
+    padding-bottom: calc(var(--space-3) + env(safe-area-inset-bottom, 12px));
+    z-index: 10;
   }
 }
 
