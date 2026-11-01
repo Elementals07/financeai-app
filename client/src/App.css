@@ -1329,17 +1329,34 @@
 /* ── 18. Responsive Overrides ── */
 /* ── 18. Mobile-First Redesign & Native APK Overrides ── */
 
-/* Bottom Navigation Bar (Mobile Native App Bar) */
-.mobile-bottom-nav {
+/* Bottom Navigation Bar & Mobile Floating Action Buttons */
+.mobile-bottom-nav,
+.mobile-fab,
+.mobile-fab-group {
   display: none;
 }
 
 @media (max-width: 900px) {
+  /* Layout reset on mobile: full width, vertical stack, no sidebar margin */
+  .app-layout {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  .desktop-only-action {
+    display: none !important;
+  }
+
   /* Top App Bar */
   .mobile-header {
     display: flex;
     align-items: center;
     justify-content: space-between;
+    width: 100%;
+    box-sizing: border-box;
     height: calc(56px + max(env(safe-area-inset-top, 0px), 8px));
     padding-top: max(env(safe-area-inset-top, 0px), 8px);
     padding-left: var(--space-4);
@@ -1407,14 +1424,21 @@
 
   /* Main Layout & Page Wrapper */
   .main-content, .main-content.sidebar-collapsed {
-    margin-left: 0;
+    margin-left: 0 !important;
+    width: 100% !important;
+    max-width: 100vw;
+    min-width: 0;
+    overflow-x: hidden;
   }
 
   .page-wrapper {
     padding-top: var(--space-3);
     padding-bottom: calc(76px + env(safe-area-inset-bottom, 0px));
-    padding-left: var(--space-3);
-    padding-right: var(--space-3);
+    padding-left: 12px;
+    padding-right: 12px;
+    width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
   }
 
   /* Sidebar Drawer */
@@ -1697,8 +1721,12 @@
   }
 
   .summary-card-tag {
-    font-size: 0.6875rem;
-    padding: 1px 6px;
+    font-size: 0.65rem;
+    padding: 1px 5px;
+    max-width: 85px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .summary-card-label {

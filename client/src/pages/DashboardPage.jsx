@@ -152,10 +152,10 @@ const DashboardPage = () => {
                             </select>
                         </div>
 
-                        {/* Fast Add Expense Action Button */}
+                        {/* Fast Add Expense Action Button (Desktop only, mobile has FAB) */}
                         <button 
                             type="button"
-                            className="btn btn-primary add-expense-top-btn"
+                            className="btn btn-primary add-expense-top-btn desktop-only-action"
                             onClick={() => setShowAddModal(true)}
                             aria-label="Add a new expense"
                         >
