@@ -1656,8 +1656,13 @@
     align-self: center;
   }
 
+  /* SMS action inside the stacked FAB group */
+  .mobile-fab-sms {
+    position: static;
+  }
+
   /* Single FAB on Dashboard */
-  .mobile-fab:not(.mobile-fab-primary):not(.mobile-fab-secondary) {
+  .mobile-fab:not(.mobile-fab-primary):not(.mobile-fab-secondary):not(.mobile-fab-sms) {
     position: fixed;
     bottom: calc(72px + env(safe-area-inset-bottom, 0px));
     right: 16px;
@@ -2078,6 +2083,53 @@
     height: auto;
     min-height: 480px;
     max-height: none;
+  }
+}
+
+/* Responsive dashboard charts */
+.spending-chart-wrap {
+  position: relative;
+  width: 100%;
+  max-width: 240px;
+  aspect-ratio: 1 / 1;
+  margin: 0.75rem auto;
+  min-width: 0;
+}
+
+.spending-chart-wrap canvas {
+  max-width: 100% !important;
+  max-height: 100% !important;
+}
+
+.daily-chart-wrap {
+  position: relative;
+  width: 100%;
+  min-width: 0;
+  height: 230px;
+}
+
+.daily-chart-wrap canvas {
+  max-width: 100% !important;
+}
+
+.daily-chart-controls {
+  flex-shrink: 0;
+}
+
+@media (max-width: 640px) {
+  .daily-chart-header {
+    flex-direction: column;
+    align-items: stretch !important;
+  }
+
+  .daily-chart-controls {
+    align-self: flex-start;
+    max-width: 100%;
+    flex-wrap: wrap;
+  }
+
+  .daily-chart-controls button {
+    min-height: 32px;
   }
 }
 

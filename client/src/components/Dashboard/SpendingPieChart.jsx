@@ -42,7 +42,7 @@ const SpendingPieChart = ({ categoryBreakdown = [] }) => {
 
     const options = {
         responsive: true,
-        maintainAspectRatio: true,
+        maintainAspectRatio: false,
         cutout: '62%',
         plugins: {
             legend: {
@@ -77,11 +77,9 @@ const SpendingPieChart = ({ categoryBreakdown = [] }) => {
                     <p className="card-subtitle">Spending breakdown by category this month</p>
                 </div>
             </div>
-            {/* Chart canvas in fixed centered square */}
-            <div style={{ width: '100%', display: 'flex', justifyContent: 'center', marginTop: '0.75rem', marginBottom: '0.75rem' }}>
-                <div style={{ width: '220px', height: '220px', position: 'relative' }}>
-                    <Doughnut data={data} options={options} />
-                </div>
+            {/* Responsive, centered doughnut */}
+            <div className="spending-chart-wrap">
+                <Doughnut data={data} options={options} />
             </div>
 
             {/* Custom centered HTML chips legend */}

@@ -130,12 +130,12 @@ const DailyExpenseChart = ({ dailySpending = [], currentMonth }) => {
     return (
         <div className="card">
             {/* Heading + Zoom toggles */}
-            <div className="card-header" style={{ alignItems: 'flex-start' }}>
+            <div className="card-header daily-chart-header" style={{ alignItems: 'flex-start' }}>
                 <div>
                     <h2 className="card-title">Daily Spending Pattern</h2>
                     <p className="card-subtitle">Day-by-day spending spikes and activity</p>
                 </div>
-                <div style={{ display: 'flex', gap: '4px', background: 'var(--bg-surface-subtle)', padding: '2px', borderRadius: 'var(--radius-full)', border: '1px solid var(--border-color)' }}>
+                <div className="daily-chart-controls" style={{ display: 'flex', gap: '4px', background: 'var(--bg-surface-subtle)', padding: '2px', borderRadius: 'var(--radius-full)', border: '1px solid var(--border-color)' }}>
                     <button
                         type="button"
                         onClick={() => setZoomView('7d')}
@@ -186,11 +186,9 @@ const DailyExpenseChart = ({ dailySpending = [], currentMonth }) => {
                     </button>
                 </div>
             </div>
-            {/* Horizontally scrollable on narrow screens */}
-            <div className="chart-scroll-x" style={{ marginTop: '0.5rem' }}>
-                <div style={{ minWidth: zoomView === 'all' ? `${Math.max(320, labels.length * 20)}px` : '100%', height: '230px', position: 'relative' }}>
-                    <Line data={data} options={options} />
-                </div>
+            {/* Full-width responsive chart; remount on filter changes to resize cleanly */}
+            <div className="daily-chart-wrap" style={{ marginTop: '0.5rem' }}>
+                <Line key={zoomView} data={data} options={options} />
             </div>
         </div>
     );

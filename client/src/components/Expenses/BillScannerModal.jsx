@@ -13,7 +13,8 @@ import {
     HiOutlineXMark,
     HiOutlinePlus,
     HiOutlineTrash,
-    HiOutlineExclamationTriangle
+    HiOutlineExclamationTriangle,
+    HiOutlineInformationCircle
 } from 'react-icons/hi2';
 
 const today = () => new Date().toISOString().slice(0, 10);
@@ -44,6 +45,7 @@ const BillScannerModal = ({ onClose, onSuccess }) => {
     const [category, setCategory] = useState(categoryNames[0] || 'Food');
     const [billDate, setBillDate] = useState(today);
     const [items, setItems] = useState([]);
+    const [saveMode, setSaveMode] = useState('split');
 
     const [scanError, setScanError] = useState(null);
     const [aiWarnings, setAiWarnings] = useState([]);
@@ -162,12 +164,14 @@ const BillScannerModal = ({ onClose, onSuccess }) => {
                 category: resolveCategory(item.category)
             })));
             setAiWarnings(Array.isArray(data.warnings) ? data.warnings.filter(Boolean) : []);
+            setSaveMode(detectedItems.length > 0 ? 'split' : 'single');
 
             setStep(2);
-            toast.success('Bill extracted. Please review every line item before saving.');
+            toast.success('Bill extracted. Review the details and choose how to save it.');
         } catch (err) {
             setScanError(err?.message || 'The receipt could not be read automatically.');
             toast.error('Could not auto-read the bill. You can still enter the details manually.');
+            setSaveMode('single');
             setStep(2); // Allow manual entry even if scanning had issues
         } finally {
             setScanning(false);
@@ -197,6 +201,7 @@ const BillScannerModal = ({ onClose, onSuccess }) => {
         setStep(1);
         setImagePreview(null);
         setItems([]);
+        setSaveMode('split');
         setScanError(null);
         setAiWarnings([]);
         setReceiptConfirmed(false);
@@ -206,13 +211,14 @@ const BillScannerModal = ({ onClose, onSuccess }) => {
 
     const parsedTotal = parseFloat(totalAmount);
     const hasItems = items.length > 0;
+    const shouldSaveItemized = saveMode === 'split' && hasItems;
     const {
         itemsTotal,
         difference,
         isBalanced
     } = computeReceiptDifference(parsedTotal, items);
     const needsDifferenceConfirmation =
-        hasItems &&
+        shouldSaveItemized &&
         Number.isFinite(parsedTotal) &&
         parsedTotal > 0 &&
         !isBalanced;
@@ -231,7 +237,7 @@ const BillScannerModal = ({ onClose, onSuccess }) => {
             return;
         }
 
-        if (hasItems) {
+        if (shouldSaveItemized) {
             const invalidItem = items.find(item => {
                 const amount = parseFloat(item.amount);
                 return !Number.isFinite(amount) || amount <= 0;
@@ -248,7 +254,7 @@ const BillScannerModal = ({ onClose, onSuccess }) => {
 
         const itemsForFingerprint = hasItems
             ? items.map((item, index) => ({
-                name: item.name.trim() || `Item ${index + 1}`,
+                name: String(item.name || '').trim() || `Item ${index + 1}`,
                 amount: parseFloat(item.amount),
                 category: resolveCategory(item.category)
             }))
@@ -277,7 +283,7 @@ const BillScannerModal = ({ onClose, onSuccess }) => {
                 }
             }
 
-            if (hasItems) {
+            if (shouldSaveItemized) {
                 const batchPayload = itemsForFingerprint.map(item => ({
                     amount: item.amount,
                     category: item.category,
@@ -295,7 +301,7 @@ const BillScannerModal = ({ onClose, onSuccess }) => {
                     description: merchant ? `Bill: ${merchant}` : 'Scanned receipt',
                     receipt_fingerprint: fingerprint
                 });
-                toast.success('Bill expense recorded');
+                toast.success('Receipt saved as one expense');
             }
 
             if (onSuccess) {
@@ -319,7 +325,11 @@ const BillScannerModal = ({ onClose, onSuccess }) => {
                             Scan Bill or Receipt
                         </h2>
                         <p className="modal-subtitle">
-                            {step === 1 ? 'Step 1 of 2: Upload receipt' : 'Step 2 of 2: Review, split and reconcile'}
+                            {step === 1
+                                ? 'Step 1 of 2: Upload receipt'
+                                : saveMode === 'single'
+                                    ? 'Step 2 of 2: Review and save as one expense'
+                                    : 'Step 2 of 2: Review, split and reconcile'}
                         </p>
                     </div>
                     <button type="button" className="modal-close-btn" onClick={onClose} aria-label="Close dialog">
@@ -363,7 +373,7 @@ const BillScannerModal = ({ onClose, onSuccess }) => {
                                     {scanning ? 'Reading bill details...' : 'Select or Photograph a Bill'}
                                 </h3>
                                 <p style={{ fontSize: '0.875rem', color: 'var(--text-secondary)', marginBottom: '1.25rem' }}>
-                                    Each product line is categorised separately so a single bill can become multiple expenses.
+                                    By default each product line is categorised separately. You can also save the full receipt as one expense.
                                 </p>
 
                                 {scanning ? (
@@ -411,7 +421,7 @@ const BillScannerModal = ({ onClose, onSuccess }) => {
                                 <div className="status-banner good" style={{ marginBottom: '1rem' }}>
                                     <HiOutlineCheck className="status-banner-icon" aria-hidden="true" />
                                     <div className="status-banner-text">
-                                        <strong>Bill details extracted.</strong> Review every line item and the totals before saving.
+                                        <strong>Bill details extracted.</strong> Review the details and choose how to save this receipt.
                                     </div>
                                 </div>
                             )}
@@ -454,6 +464,68 @@ const BillScannerModal = ({ onClose, onSuccess }) => {
                                     </button>
                                 </div>
                             )}
+
+                            {/* Saving mode */}
+                            <div className="form-group">
+                                <span className="form-label">How should this receipt be saved?</span>
+                                <div
+                                    role="radiogroup"
+                                    aria-label="Receipt save mode"
+                                    style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: '0.5rem' }}
+                                >
+                                    <label style={{
+                                        display: 'flex',
+                                        alignItems: 'flex-start',
+                                        gap: '0.5rem',
+                                        padding: '0.7rem 0.75rem',
+                                        borderRadius: 'var(--radius-sm)',
+                                        border: `1px solid ${saveMode === 'split' ? 'var(--color-primary)' : 'var(--border-color)'}`,
+                                        background: saveMode === 'split' ? 'var(--color-primary-subtle)' : 'var(--bg-surface-subtle)',
+                                        cursor: 'pointer'
+                                    }}>
+                                        <input
+                                            type="radio"
+                                            name="receipt-save-mode"
+                                            value="split"
+                                            checked={saveMode === 'split'}
+                                            onChange={() => setSaveMode('split')}
+                                            style={{ marginTop: '2px', accentColor: 'var(--color-primary)' }}
+                                        />
+                                        <span>
+                                            <span style={{ display: 'block', fontSize: '0.8125rem', fontWeight: 700 }}>Split & categorize items</span>
+                                            <span style={{ display: 'block', fontSize: '0.75rem', color: 'var(--text-secondary)', lineHeight: 1.35 }}>
+                                                Save each detected line item as its own expense.
+                                            </span>
+                                        </span>
+                                    </label>
+
+                                    <label style={{
+                                        display: 'flex',
+                                        alignItems: 'flex-start',
+                                        gap: '0.5rem',
+                                        padding: '0.7rem 0.75rem',
+                                        borderRadius: 'var(--radius-sm)',
+                                        border: `1px solid ${saveMode === 'single' ? 'var(--color-primary)' : 'var(--border-color)'}`,
+                                        background: saveMode === 'single' ? 'var(--color-primary-subtle)' : 'var(--bg-surface-subtle)',
+                                        cursor: 'pointer'
+                                    }}>
+                                        <input
+                                            type="radio"
+                                            name="receipt-save-mode"
+                                            value="single"
+                                            checked={saveMode === 'single'}
+                                            onChange={() => setSaveMode('single')}
+                                            style={{ marginTop: '2px', accentColor: 'var(--color-primary)' }}
+                                        />
+                                        <span>
+                                            <span style={{ display: 'block', fontSize: '0.8125rem', fontWeight: 700 }}>Save as one expense</span>
+                                            <span style={{ display: 'block', fontSize: '0.75rem', color: 'var(--text-secondary)', lineHeight: 1.35 }}>
+                                                Record the full receipt total under the default category.
+                                            </span>
+                                        </span>
+                                    </label>
+                                </div>
+                            </div>
 
                             {/* Merchant / Store */}
                             <div className="form-group">
@@ -518,7 +590,17 @@ const BillScannerModal = ({ onClose, onSuccess }) => {
                                 </div>
                             </div>
 
+                            {saveMode === 'single' && (
+                                <div className="status-banner info" style={{ marginBottom: '1.25rem' }}>
+                                    <HiOutlineInformationCircle className="status-banner-icon" aria-hidden="true" />
+                                    <div className="status-banner-text">
+                                        <strong>One expense will be saved.</strong> The full receipt total of ₹{formatMoney(parsedTotal)} will be recorded under {resolveCategory(category)}. Detected line items remain available if you switch back.
+                                    </div>
+                                </div>
+                            )}
+
                             {/* Receipt summary / reconciliation */}
+                            {saveMode === 'split' && (
                             <div style={{
                                 background: 'var(--bg-surface-subtle)',
                                 border: '1px solid var(--border-color)',
@@ -552,6 +634,7 @@ const BillScannerModal = ({ onClose, onSuccess }) => {
                                     </div>
                                 )}
                             </div>
+                            )}
 
                             {needsDifferenceConfirmation && (
                                 <label style={{ display: 'flex', alignItems: 'flex-start', gap: '0.5rem', fontSize: '0.8125rem', marginBottom: '1.25rem', cursor: 'pointer' }}>
@@ -568,6 +651,7 @@ const BillScannerModal = ({ onClose, onSuccess }) => {
                             )}
 
                             {/* Line items */}
+                            {saveMode === 'split' ? (
                             <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '1rem' }}>
                                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
                                     <div>
@@ -644,6 +728,16 @@ const BillScannerModal = ({ onClose, onSuccess }) => {
                                     </div>
                                 )}
                             </div>
+                            ) : (
+                                <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '1rem' }}>
+                                    <div style={{ fontWeight: 700, fontSize: '0.9rem', marginBottom: '0.5rem' }}>Line Items ({items.length})</div>
+                                    <div style={{ fontSize: '0.8125rem', color: 'var(--text-secondary)', background: 'var(--bg-surface-subtle)', border: '1px dashed var(--border-color)', borderRadius: 'var(--radius-sm)', padding: '0.875rem' }}>
+                                        {hasItems
+                                            ? `${items.length} detected line item${items.length === 1 ? '' : 's'} will not be saved individually. Switch to "Split & categorize items" to edit and save them.`
+                                            : 'No line items were detected. The full receipt total will be saved as one expense.'}
+                                    </div>
+                                </div>
+                            )}
                         </div>
                     )}
                 </div>
@@ -663,7 +757,11 @@ const BillScannerModal = ({ onClose, onSuccess }) => {
                         >
                             {saving
                                 ? 'Saving...'
-                                : (hasItems ? `Save ${items.length} Itemized Expense${items.length === 1 ? '' : 's'}` : 'Save Expense')}
+                                : shouldSaveItemized
+                                    ? `Save ${items.length} Itemized Expense${items.length === 1 ? '' : 's'}`
+                                    : saveMode === 'single'
+                                        ? 'Save as One Expense'
+                                        : 'Save Expense'}
                         </button>
                     )}
                 </div>

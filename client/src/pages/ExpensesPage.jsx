@@ -341,7 +341,7 @@ const ExpensesPage = () => {
             <div className="mobile-fab-group">
                 <button
                     type="button"
-                    className="mobile-fab"
+                    className="mobile-fab mobile-fab-sms"
                     onClick={handleScanSms}
                     disabled={scanningSms}
                     aria-label="Scan Bank SMS"

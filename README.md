@@ -11,10 +11,16 @@ This README is written for two audiences:
 
 ---
 
-## What is new in the latest version
+## What is new in v1.1.0
 
 The current release adds the following changes:
 
+- **Responsive mobile dashboard:** the category doughnut is centered inside a responsive wrapper, and the daily spending chart fills the card instead of forcing horizontal overflow.
+- **Mobile-friendly chart controls:** the 7D / 14D / Month selector moves below the chart title on narrow screens and keeps every button fully visible and tappable.
+- **Stable mobile action layout:** the SMS, camera, and add-expense buttons stay in the correct stacked group, with a dedicated style for the SMS action.
+- **Optional receipt save modes:** receipts can still be split item by item, or saved as one expense using the full receipt total and the default category.
+- **Mode-aware receipt review:** switching modes preserves scanned details and edits. One-expense mode hides item editing and skips line-item reconciliation, while itemized mode keeps the existing atomic batch save.
+- **Receipt safeguards in both modes:** total, date and category validation, duplicate fingerprints and duplicate acknowledgement continue to apply.
 - **Receipt splitting:** one receipt can be reviewed item by item, each line can have its own category and amount, and every item is saved as its own expense transaction.
 - **Receipt reconciliation:** the receipt total and the sum of line items are shown separately. If they differ, the user must explicitly confirm the difference before saving. The difference is never silently spread across products.
 - **Receipt duplicate protection:** a deterministic receipt fingerprint is stored on saved transactions. Re-saving the same receipt requires a second confirmation.
@@ -25,7 +31,7 @@ The current release adds the following changes:
 - **Tests and build hygiene:** pure parsing, receipt and budget logic is covered by 15 client tests, and proxy routing/rotation/error handling by 14 server tests. ESLint no longer scans generated Android bundles.
 - **Refreshed APK:** `apk/FinanceAI.apk` was rebuilt from the current source.
 
-Latest implementation commit at the time of writing: `86c5842 feat: add receipt splitting, category budgets, and SMS import`.
+Latest release: `v1.1.0`.
 
 ---
 

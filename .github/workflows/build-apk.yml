@@ -71,20 +71,21 @@ jobs:
         uses: softprops/action-gh-release@v2
         if: github.ref == 'refs/heads/main'
         with:
-          tag_name: v1.0.0
-          name: "FinanceAI Mobile v1.0.0 (Local-First with Server-Only AI Keys)"
+          tag_name: v1.1.0
+          name: "FinanceAI Mobile v1.1.0 (Responsive UI and Receipt Save Modes)"
           draft: false
           prerelease: false
           token: ${{ secrets.GITHUB_TOKEN }}
           body: |
-            ### 📱 FinanceAI Mobile App v1.0.0
+            ### 📱 FinanceAI Mobile App v1.1.0
 
             **Local-first finance data with a server-side AI proxy:**
             - 💾 **On-Device Dexie / IndexedDB**: All expenses, budgets, categories, and historical data stored locally.
-            - 📊 **Local Analytics Engine**: Monthly summaries, category baselines, micro-leakage detection, and multi-year trend calculations run 100% on-device.
-            - 🤖 **Server-Proxied Gemini**: AI requests use a central proxy with automatic five-key rotation. Gemini keys are never bundled in the APK.
-            - 📸 **Native Receipt Scanner**: Instant receipt scanning via device camera or gallery powered by Gemini Vision OCR.
-            - 🎨 **Unified Design System**: Retains the polished Indigo (`#2D3FBF`) and Teal (`#0EA5C9`) design system with mobile safe-areas.
+            - 📊 **Responsive Mobile Dashboard**: Centered doughnut chart, full-width daily spending chart, and mobile-friendly period controls without horizontal overflow.
+            - 📸 **Optional Receipt Save Modes**: Review a receipt item by item, or save the full receipt total as a single expense under the default category.
+            - 🧾 **Receipt Safeguards**: Duplicate detection, total/date/category validation, and atomic itemized saving remain active in both modes.
+            - 📱 **Stable Mobile Actions**: SMS, camera, and add-expense actions now stay in the correct stacked mobile layout.
+            - 🤖 **Server-Proxied Gemini**: AI requests use a central proxy with automatic five-key rotation. Gemini keys are never bundled in the APK. A reachable HTTPS `VITE_AI_API_URL` is required for AI features.
             
             **Direct Download:**
             - Tap `FinanceAI.apk` under **Assets** below to download and install.
