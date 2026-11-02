@@ -46,7 +46,7 @@ const ChatAssistant = () => {
             const aiReply = res.data?.data?.reply || 'I reviewed your data, but could not produce a response. Please try asking again.';
             setMessages(prev => [...prev, { role: 'assistant', content: aiReply }]);
         } catch (err) {
-            toast.error(err.response?.data?.message || 'Failed to get response');
+            toast.error(err.response?.data?.message || err.message || 'Failed to get response');
             setMessages(prev => [...prev, {
                 role: 'assistant',
                 content: 'I encountered an error analyzing your data. Please check your connection or try again.'

@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
+import GeminiSettingsModal from '../AI/GeminiSettingsModal';
+import { getGeminiKeyCount, MAX_GEMINI_KEYS } from '../../services/geminiKeys';
 import { 
     HiOutlineHome, 
     HiOutlineCreditCard, 
@@ -10,6 +12,7 @@ import {
     HiOutlineCircleStack,
     HiOutlineTag,
     HiOutlineQuestionMarkCircle,
+    HiOutlineCog6Tooth,
     HiOutlineChevronLeft,
     HiOutlineChevronRight,
     HiOutlineXMark
@@ -18,6 +21,8 @@ import {
 const Sidebar = ({ mobileOpen, onCloseMobile }) => {
     const { user, logout } = useAuth();
     const navigate = useNavigate();
+    const [settingsOpen, setSettingsOpen] = useState(false);
+    const [keyCount, setKeyCount] = useState(() => getGeminiKeyCount());
 
     // Default to open (not collapsed) on desktop as per UX guidelines
     const [collapsed, setCollapsed] = useState(() => {
@@ -53,6 +58,11 @@ const Sidebar = ({ mobileOpen, onCloseMobile }) => {
         navigate('/login'); 
     };
 
+    const handleOpenSettings = () => {
+        setSettingsOpen(true);
+        onCloseMobile();
+    };
+
     const getInitials = (name) => {
         if (!name) return '?';
         return name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2);
@@ -80,6 +90,7 @@ const Sidebar = ({ mobileOpen, onCloseMobile }) => {
     ];
 
     return (
+        <>
         <aside 
             className={`sidebar ${collapsed ? 'collapsed' : ''} ${mobileOpen ? 'mobile-open' : ''}`}
             aria-label="Main Navigation"
@@ -141,6 +152,43 @@ const Sidebar = ({ mobileOpen, onCloseMobile }) => {
                         ))}
                     </div>
                 ))}
+
+                <div style={{ marginBottom: '0.5rem' }}>
+                    {!collapsed && <div className="sidebar-section-title">App</div>}
+                    <button
+                        type="button"
+                        className="nav-item"
+                        onClick={handleOpenSettings}
+                        title={collapsed ? 'AI Settings' : undefined}
+                        aria-label={`AI Settings, ${keyCount} of ${MAX_GEMINI_KEYS} keys configured`}
+                        aria-haspopup="dialog"
+                        aria-expanded={settingsOpen}
+                        style={{
+                            width: '100%',
+                            background: 'transparent',
+                            cursor: 'pointer',
+                            textAlign: 'left',
+                            fontFamily: 'inherit'
+                        }}
+                    >
+                        <span className="nav-icon"><HiOutlineCog6Tooth aria-hidden="true" /></span>
+                        {!collapsed && (
+                            <>
+                                <span className="nav-item-label">AI Settings</span>
+                                <span
+                                    style={{
+                                        marginLeft: 'auto',
+                                        fontSize: '0.75rem',
+                                        fontWeight: 600,
+                                        color: keyCount > 0 ? 'var(--color-primary)' : 'var(--color-danger)'
+                                    }}
+                                >
+                                    {keyCount}/{MAX_GEMINI_KEYS}
+                                </span>
+                            </>
+                        )}
+                    </button>
+                </div>
             </nav>
 
             {/* User Footer */}
@@ -181,6 +229,14 @@ const Sidebar = ({ mobileOpen, onCloseMobile }) => {
                 )}
             </div>
         </aside>
+
+        {settingsOpen && (
+            <GeminiSettingsModal
+                onClose={() => setSettingsOpen(false)}
+                onSaved={(keys) => setKeyCount(keys.length)}
+            />
+        )}
+        </>
     );
 };
 

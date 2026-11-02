@@ -38,7 +38,7 @@ const AnalysisPanel = () => {
                 setSignal(res.data.data.healthSignal || 'green');
             }
         } catch (err) {
-            setError(err.response?.data?.message || 'Could not load analysis. Please check your data or try again.');
+            setError(err.response?.data?.message || err.message || 'Could not load analysis. Please check your data or try again.');
         } finally {
             setLoading(false);
         }

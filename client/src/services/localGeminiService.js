@@ -1,5 +1,6 @@
 import { db } from './localDatabase';
 import { localExpenseService } from './localExpenseService';
+import { loadGeminiKeys } from './geminiKeys';
 import {
     dateToLocalYmd,
     isExcludedSmsBody,
@@ -9,15 +10,8 @@ import {
     redactSmsBody
 } from './financeParsers';
 
-const DEFAULT_AI_API_URL = 'http://localhost:5000/api/ai';
-const AI_REQUEST_TIMEOUT_MS = 120000;
-
-function getAiApiUrl() {
-    const configured = typeof import.meta !== 'undefined' && import.meta.env
-        ? String(import.meta.env.VITE_AI_API_URL || '').trim()
-        : '';
-    return (configured || DEFAULT_AI_API_URL).replace(/\/+$/, '');
-}
+const GEMINI_ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent';
+let activeKeyIndex = 0;
 
 function parseJsonSafely(text, fallback) {
     if (typeof text !== 'string' || !text.trim()) return fallback;
@@ -156,47 +150,50 @@ async function executeLocalTool(toolName, args) {
 }
 
 /**
- * Sends a Gemini-shaped payload to the FinanceAI AI proxy. Gemini keys and
- * key rotation stay on the server; the app never sees or stores them.
+ * Direct Gemini caller with user-supplied key rotation and retries. Keys live
+ * only in this device's local storage and are never logged or bundled.
  */
-async function callGeminiProxy(payload) {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), AI_REQUEST_TIMEOUT_MS);
+async function callGeminiDirect(payload, maxRetries = 4) {
+    const keys = loadGeminiKeys();
 
-    try {
-        let res;
+    if (keys.length === 0) {
+        throw new Error(
+            'No Gemini API key configured. Open AI Settings in the sidebar and add up to 5 keys.'
+        );
+    }
+
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+        const key = keys[activeKeyIndex % keys.length];
+        const url = `${GEMINI_ENDPOINT}?key=${encodeURIComponent(key)}`;
 
         try {
-            res = await fetch(`${getAiApiUrl()}/generate`, {
+            const res = await fetch(url, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload),
-                signal: controller.signal
+                body: JSON.stringify(payload)
             });
-        } catch (error) {
-            if (error.name === 'AbortError') {
-                throw new Error('The AI request timed out. Please try again.');
-            }
-            throw new Error(
-                'The AI backend is unreachable. Start the FinanceAI AI server or set VITE_AI_API_URL.'
-            );
-        }
 
-        if (!res.ok) {
-            let message = 'The AI service is temporarily unavailable. Please try again in a moment.';
-            try {
-                const data = await res.json();
-                if (data?.message) message = data.message;
-            } catch {
-                // Keep the generic message when the proxy does not return JSON.
+            if (res.status === 429 || res.status === 500 || res.status === 503) {
+                activeKeyIndex = (activeKeyIndex + 1) % keys.length;
+                continue;
             }
-            throw new Error(message);
-        }
 
-        return await res.json();
-    } finally {
-        clearTimeout(timeout);
+            if (!res.ok) {
+                throw new Error(`Gemini rejected the request (HTTP ${res.status}).`);
+            }
+
+            return await res.json();
+        } catch {
+            activeKeyIndex = (activeKeyIndex + 1) % keys.length;
+
+            const waitMs = (attempt + 1) * 1000;
+            await new Promise(resolve => setTimeout(resolve, waitMs));
+        }
     }
+
+    throw new Error(
+        `Gemini request failed after ${maxRetries + 1} attempts. Check your API keys in AI Settings.`
+    );
 }
 
 export const localGeminiService = {
@@ -308,7 +305,7 @@ export const localGeminiService = {
             }
         };
 
-        const result = await callGeminiProxy(payload);
+        const result = await callGeminiDirect(payload);
         const analysisText = result?.candidates?.[0]?.content?.parts?.[0]?.text || 'No response generated';
 
         // Cache for 24 hours
@@ -366,7 +363,7 @@ export const localGeminiService = {
 
         // Multi-turn tool execution loop (max 3 turns)
         for (let turn = 0; turn < 3; turn++) {
-            const response = await callGeminiProxy(payload);
+            const response = await callGeminiDirect(payload);
             const candidate = response?.candidates?.[0];
             const content = candidate?.content;
 
@@ -480,7 +477,7 @@ CRITICAL: Return ONLY raw JSON without markdown code fences or backticks.`;
             }
         };
 
-        const result = await callGeminiProxy(payload);
+        const result = await callGeminiDirect(payload);
         const text = result?.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
         const parsed = parseJsonSafely(text, null);
         const normalized = normalizeReceiptResult(parsed, categoryNames);
@@ -558,7 +555,7 @@ CRITICAL: Return ONLY a raw JSON array without markdown code blocks:
                 approxDate: dateToLocalYmd(message.date)
             }));
 
-            const res = await callGeminiProxy({
+            const res = await callGeminiDirect({
                 contents: [
                     {
                         role: 'user',
