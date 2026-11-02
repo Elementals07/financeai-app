@@ -52,42 +52,58 @@ npm run dev
 
 The web version supports expenses, budgets, categories and the AI pages. Bank SMS import is Android-only because browsers cannot read the SMS inbox.
 
-### Start the AI proxy before using AI features
+### Start the AI proxy and add fresh Gemini keys
 
 AI features need the included proxy. Without it, the local parts of the app still work, but receipt scanning, SMS parsing and the AI advisor show an error.
 
-1. **Create the server environment file**
+1. **Create fresh Gemini keys**
+   - Create the keys in Google AI Studio or Google Cloud.
+   - Do not reuse a key that was committed, logged, shared or reported by Google as leaked. Google rejects those keys with HTTP 403.
+   - Enable the Gemini/Generative Language API and configure quota or billing for the project.
+
+2. **Put the keys only in `server/.env`**
    - Copy `server/.env.example` to `server/.env`.
    - Add up to five server-only keys:
      ```dotenv
-     GEMINI_API_KEY_1=YOUR_FIRST_KEY
-     GEMINI_API_KEY_2=YOUR_SECOND_KEY
+     GEMINI_API_KEY_1=YOUR_FIRST_FRESH_KEY
+     GEMINI_API_KEY_2=YOUR_SECOND_FRESH_KEY
      GEMINI_API_KEY_3=
      GEMINI_API_KEY_4=
      GEMINI_API_KEY_5=
      ```
-   - Never put these keys in `client/`, Vite variables, localStorage or Git.
+   - `server/.env` is ignored by Git. Never put keys in `client/`, Vite variables, localStorage, GitHub, screenshots, logs or chat.
 
-2. **Install and start the proxy**
+3. **Install and start the proxy**
    ```bash
    cd server
    npm install
    npm run dev
    ```
-   The proxy listens on `http://localhost:5000` by default. Check `http://localhost:5000/api/health`.
+   The proxy listens on `http://localhost:5000` by default.
 
-3. **Point the app at the proxy**
+4. **Verify that the server sees the keys**
+   ```powershell
+   Invoke-RestMethod http://localhost:5000/api/health
+   ```
+   `ai.configured` should be `true`, and `ai.keyCount` should match the number of non-empty keys in `server/.env`.
+
+5. **Point the app at the proxy**
    - Web development uses `http://localhost:5000/api/ai` by default.
    - To override it, create `client/.env`:
      ```dotenv
      VITE_AI_API_URL=http://localhost:5000/api/ai
      ```
    - For an Android emulator, use `http://10.0.2.2:5000/api/ai`. For a physical device, use your computer's LAN IP, or deploy the proxy over HTTPS and use that URL.
-   - For GitHub Actions APK builds, set the repository secret `AI_API_URL` to the deployed proxy URL.
+   - For GitHub Actions APK builds, set the repository secret `AI_API_URL` to the deployed proxy URL. This secret is only a URL; never put Gemini keys in it.
+
+6. **Deploy the keys with the server**
+   - Add the same `GEMINI_API_KEY_1..5` names to the server host's environment or secret store.
+   - Restart the deployed proxy and confirm its `/api/health` endpoint reports `configured: true`.
+
+7. **Revoke old leaked keys**
+   - Delete or disable any key that was ever committed, logged, shared or reported as leaked in Google AI Studio or Google Cloud.
 
 **Security rule:** never commit real keys to Git, issues, screenshots or logs. Revoke any key that was previously exposed in Git history.
-
-Enable the Gemini API in Google Cloud and configure quota or billing for the server keys.
 
 ---
 
@@ -499,6 +515,7 @@ If Android build output or generated web assets are being linted accidentally, u
 | “The AI backend is unreachable” | Start the proxy with `npm run dev` in `server/`, check `http://localhost:5000/api/health`, and confirm `VITE_AI_API_URL` points at it. For Android, do not use `localhost` unless the proxy runs on the device. |
 | “AI service is not configured on the server” | Add `GEMINI_API_KEY_1..5` to `server/.env` and restart the proxy. |
 | “AI service is temporarily unavailable” | All keys were rate-limited or rejected. Check server logs, Google Cloud quota and key validity. |
+| Server logs show HTTP 403 or “API key was reported as leaked” | Google rejected the key as leaked. Create a fresh key, put it in `server/.env`, restart the proxy and revoke the old key. |
 | Receipt scan fails | Check the proxy health, network connection and image size (under 8 MB). You can still enter the receipt manually. |
 | SMS sync button fails on the web | SMS import is Android-only. Use the APK. |
 | SMS permission denied | Re-enable SMS permission in Android app settings, then tap Sync Bank SMS again. |
