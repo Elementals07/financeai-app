@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import API from '../../api/axios';
 import { useAuth } from '../../context/AuthContext';
 import toast from 'react-hot-toast';
@@ -21,12 +21,10 @@ const BudgetManager = () => {
         const now = new Date();
         return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
     });
-    const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
     const [validationError, setValidationError] = useState('');
 
-    const fetchBudget = async (month) => {
-        setLoading(true);
+    const fetchBudget = useCallback(async (month) => {
         setValidationError('');
         try {
             const res = await API.get(`/budgets?month=${month}`);
@@ -44,14 +42,12 @@ const BudgetManager = () => {
         } catch (err) {
             console.error('Failed to fetch budget:', err);
             toast.error('Failed to load budget data');
-        } finally {
-            setLoading(false);
         }
-    };
+    }, [categoryNames, user?.monthly_income]);
 
     useEffect(() => {
         fetchBudget(monthInput);
-    }, [monthInput]);
+    }, [fetchBudget, monthInput]);
 
     const handleInputChange = (category, value) => {
         setAllocationsInput(prev => ({

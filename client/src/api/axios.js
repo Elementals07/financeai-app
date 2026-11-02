@@ -73,6 +73,12 @@ const API = {
             };
         }
 
+        // 4a. Receipt duplicate check
+        if (cleanUrl === '/expenses/receipt-fingerprint') {
+            const exists = await localExpenseService.receiptFingerprintExists(params.fingerprint);
+            return { data: { success: true, data: { exists } } };
+        }
+
         // 5. Budgets
         if (cleanUrl === '/budgets') {
             const month = params.month || new Date().toISOString().slice(0, 7);
@@ -94,13 +100,13 @@ const API = {
 
         // 1. Auth Login
         if (cleanUrl === '/auth/login') {
-            const res = await localExpenseService.login(body.email, body.password);
+            const res = await localExpenseService.login(body.email);
             return { data: { success: true, data: res } };
         }
 
         // 2. Auth Register
         if (cleanUrl === '/auth/register') {
-            const res = await localExpenseService.register(body.name, body.email, body.password);
+            const res = await localExpenseService.register(body.name, body.email);
             return { data: { success: true, data: res } };
         }
 
@@ -124,6 +130,18 @@ const API = {
                     success: true,
                     message: `${created.length} expense(s) recorded successfully`,
                     data: created
+                }
+            };
+        }
+
+        // 4a. SMS Batch Import (atomic transactions + processed SMS markers)
+        if (cleanUrl === '/expenses/sms-import') {
+            const result = await localExpenseService.importSmsTransactions(body.items || []);
+            return {
+                data: {
+                    success: true,
+                    message: `${result.created.length} SMS transaction(s) recorded successfully`,
+                    data: result
                 }
             };
         }

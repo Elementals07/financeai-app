@@ -41,16 +41,12 @@ const MonthlyTrendChart = ({ trends = [] }) => {
     }
 
     const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-    let lastYear = null;
-    
-    const labels = trends.map(t => {
+
+    const labels = trends.map((t, index) => {
         const [y, m] = t.month.split('-');
         const monthName = monthNames[parseInt(m, 10) - 1];
-        if (y !== lastYear) {
-            lastYear = y;
-            return `${monthName} ${y}`;
-        }
-        return monthName;
+        const previousYear = index > 0 ? trends[index - 1].month.split('-')[0] : null;
+        return y !== previousYear ? `${monthName} ${y}` : monthName;
     });
 
     const data = {

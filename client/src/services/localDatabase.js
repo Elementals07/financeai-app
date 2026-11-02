@@ -17,6 +17,17 @@ db.version(1).stores({
     ai_insights_cache: '++id, [user_id+type+prompt_hash], expires_at'
 });
 
+// v2 adds durable SMS deduplication and receipt duplicate detection.
+// Existing stores and indexes are preserved; no data is removed.
+db.version(2).stores({
+    transactions: '++id, user_id, date, category, amount, created_at, receipt_fingerprint',
+    budgets: '++id, [user_id+month+category], user_id, month, category',
+    categories: '++id, user_id, name',
+    user_profile: '++id, email',
+    ai_insights_cache: '++id, [user_id+type+prompt_hash], expires_at',
+    processed_sms: '++id, &[user_id+sms_id], user_id, sms_id, processed_at'
+});
+
 /**
  * Initializes and seeds the on-device database on first app launch
  */

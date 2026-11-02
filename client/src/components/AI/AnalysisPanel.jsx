@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import API from '../../api/axios';
 import { HiOutlineSparkles, HiOutlineArrowPath, HiOutlineExclamationTriangle } from 'react-icons/hi2';
 import toast from 'react-hot-toast';
@@ -26,7 +26,7 @@ const AnalysisPanel = () => {
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState(null);
 
-    const fetchAnalysis = async (tf = timeframe, forceRefresh = false) => {
+    const fetchAnalysis = useCallback(async (forceRefresh = false) => {
         setLoading(true);
         setError(null);
         try {
@@ -42,14 +42,14 @@ const AnalysisPanel = () => {
         } finally {
             setLoading(false);
         }
-    };
+    }, []);
 
     useEffect(() => {
-        fetchAnalysis(timeframe);
-    }, [timeframe]);
+        fetchAnalysis();
+    }, [fetchAnalysis, timeframe]);
 
     const handleRefresh = () => {
-        fetchAnalysis(timeframe, true);
+        fetchAnalysis(true);
         toast.success('Refreshing analysis with latest spending data...');
     };
 

@@ -1,24 +1,86 @@
 import { db } from './localDatabase';
 import { localExpenseService } from './localExpenseService';
+import {
+    dateToLocalYmd,
+    isExcludedSmsBody,
+    maskSender,
+    normalizeReceiptResult,
+    normalizeSmsParse,
+    redactSmsBody
+} from './financeParsers';
 
-const GEMINI_KEYS = [
-    'AIzaSyCpTs5tDW9xJgW-KAAg0iIutsLw6YXPZsw',
-    'AIzaSyBCIDws6m0CC0Ey3HqobrYDeVZ2u-K9NQI',
-    'AIzaSyAExUoLgMbP6zEwrgJdl-kh7Osm9CrJM7s',
-    'AIzaSyAxl0GhonVF0N6e0odng4_fgVhzUXhAW2U',
-    'AIzaSyD6I_qmvZ8OJuGAbgkR2jtTNHATsZGR6Wo'
-];
+const USER_KEY_STORAGE = 'financeai_gemini_api_keys';
 
 let activeKeyIndex = 0;
 
-function getActiveKey() {
-    return GEMINI_KEYS[activeKeyIndex];
+function splitKeys(value) {
+    if (Array.isArray(value)) {
+        return value.map(key => String(key).trim()).filter(Boolean);
+    }
+    if (typeof value !== 'string') return [];
+    return value.split(',').map(key => key.trim()).filter(Boolean);
 }
 
-function rotateKey() {
-    activeKeyIndex = (activeKeyIndex + 1) % GEMINI_KEYS.length;
+/**
+ * Compile-time keys (e.g. VITE_GEMINI_API_KEYS in a local .env file). These are
+ * still extractable from a built APK, so they are intended for development only.
+ */
+function readEnvKeys() {
+    try {
+        if (typeof import.meta !== 'undefined' && import.meta.env) {
+            return [
+                ...splitKeys(import.meta.env.VITE_GEMINI_API_KEYS),
+                ...splitKeys(import.meta.env.VITE_GEMINI_API_KEY)
+            ];
+        }
+    } catch {
+        return [];
+    }
+    return [];
+}
+
+/**
+ * User-provided keys stored on-device. Stored keys take precedence so a user
+ * can rotate credentials without rebuilding the application.
+ */
+function readStoredKeys() {
+    try {
+        if (typeof localStorage === 'undefined') return [];
+        const raw = localStorage.getItem(USER_KEY_STORAGE);
+        return raw ? splitKeys(JSON.parse(raw)) : [];
+    } catch {
+        return [];
+    }
+}
+
+function getGeminiKeys() {
+    const keys = [...readStoredKeys(), ...readEnvKeys()];
+    return [...new Set(keys)];
+}
+
+function getActiveKey(keys) {
+    return keys[activeKeyIndex % keys.length];
+}
+
+function rotateKey(keyCount) {
+    if (keyCount <= 0) return 0;
+    activeKeyIndex = (activeKeyIndex + 1) % keyCount;
     console.log(`[GEMINI ROTATION] Switched to key #${activeKeyIndex + 1}`);
     return activeKeyIndex;
+}
+
+function parseJsonSafely(text, fallback) {
+    if (typeof text !== 'string' || !text.trim()) return fallback;
+    try {
+        return JSON.parse(text);
+    } catch {
+        try {
+            const cleaned = text.replace(/```json/gi, '').replace(/```/g, '').trim();
+            return JSON.parse(cleaned);
+        } catch {
+            return fallback;
+        }
+    }
 }
 
 const ESSENTIAL_CATEGORIES = new Set([
@@ -147,10 +209,18 @@ async function executeLocalTool(toolName, args) {
  * Direct HTTP caller for Gemini with multi-key rotation and retries
  */
 async function callGeminiDirect(payload, maxRetries = 4) {
+    const keys = getGeminiKeys();
+
+    if (keys.length === 0) {
+        throw new Error(
+            'Gemini API key is not configured. Add a key to the financeai_gemini_api_keys local setting or set VITE_GEMINI_API_KEYS before building.'
+        );
+    }
+
     let lastError = null;
 
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
-        const key = getActiveKey();
+        const key = getActiveKey(keys);
         const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${key}`;
 
         try {
@@ -161,8 +231,8 @@ async function callGeminiDirect(payload, maxRetries = 4) {
             });
 
             if (res.status === 429 || res.status === 500 || res.status === 503) {
-                console.warn(`[GEMINI API] Key #${activeKeyIndex + 1} returned status ${res.status}. Rotating...`);
-                rotateKey();
+                console.warn(`[GEMINI API] Key #${(activeKeyIndex % keys.length) + 1} returned status ${res.status}. Rotating...`);
+                rotateKey(keys.length);
                 continue;
             }
 
@@ -175,8 +245,8 @@ async function callGeminiDirect(payload, maxRetries = 4) {
             return data;
         } catch (err) {
             lastError = err;
-            console.error(`[GEMINI API] Error with key #${activeKeyIndex + 1}:`, err.message);
-            rotateKey();
+            console.error(`[GEMINI API] Error with key #${(activeKeyIndex % keys.length) + 1}:`, err.message);
+            rotateKey(keys.length);
             const waitMs = (attempt + 1) * 1000;
             await new Promise(r => setTimeout(r, waitMs));
         }
@@ -322,7 +392,6 @@ export const localGeminiService = {
      */
     async chat(userMessage, month = null, timeframe = 'All') {
         const targetMonth = month || new Date().toISOString().slice(0, 7);
-        const user = await localExpenseService.getCurrentUser();
         const dataRange = await localExpenseService.getDataRange();
 
         const [monthlySummary, budgetData] = await Promise.all([
@@ -330,7 +399,7 @@ export const localGeminiService = {
             localExpenseService.getBudget(targetMonth)
         ]);
 
-        const orientationContext = `[ORIENTATION] User record spans ${dataRange.earliestMonth} to ${dataRange.latestMonth} (${dataRange.totalTransactions} transactions across categories: ${dataRange.categories}). Current viewed month: ${targetMonth}. Monthly income: ₹${fmt(budgetData.budgetAmount)}. Total spent in ${targetMonth}: ₹${fmt(monthlySummary.totalSpending)}.`;
+        const orientationContext = `[ORIENTATION] User record spans ${dataRange.earliestMonth} to ${dataRange.latestMonth} (${dataRange.totalTransactions} transactions across categories: ${dataRange.categories}). Current viewed month: ${targetMonth}. Requested timeframe filter: ${timeframe}. Monthly income: ₹${fmt(budgetData.budgetAmount)}. Total spent in ${targetMonth}: ₹${fmt(monthlySummary.totalSpending)}.`;
 
         const contents = [
             {
@@ -412,25 +481,37 @@ export const localGeminiService = {
      * Native receipt image OCR via Gemini Vision
      */
     async scanReceiptImage(base64Image, mimeType = 'image/jpeg') {
-        const cleanBase64 = base64Image.replace(/^data:image\/[a-zA-Z0-9+.-]+;base64,/, '').trim();
+        const cleanBase64 = String(base64Image || '')
+            .replace(/^data:image\/[a-zA-Z0-9+.-]+;base64,/, '')
+            .trim();
         const categories = await localExpenseService.getCategories();
-        const validCategories = categories.map(c => c.name).join(', ') || 'Food, Travel, Rent, Entertainment, Shopping, Utilities, Health, Education, Others';
+        const categoryNames = categories.map(c => c.name);
+        const validCategories = categoryNames.join(', ') || 'Food, Travel, Rent, Entertainment, Shopping, Utilities, Health, Education, Others';
 
         const prompt = `You are an expert OCR receipt parsing engine for an Indian personal finance app.
-Extract and output a valid JSON object with the following fields:
-1. "merchant": The name of the store, vendor, shop, hospital, or company (e.g. "D-Mart", "Apollo Pharmacy", "Swiggy", "Indian Oil", "More Supermarket"). If unknown, use "Local Store".
-2. "totalAmount": The final total amount paid in Rupees as a number (e.g. 1450.50). Do not include currency symbols.
+Extract the receipt into a single valid JSON object with these fields:
+1. "merchant": Store, vendor, shop, hospital, or company name (e.g. "D-Mart", "Apollo Pharmacy", "Swiggy", "Indian Oil"). If unknown, use "Local Store".
+2. "totalAmount": The final amount paid in Rupees as a number (e.g. 1450.50). Never invent or estimate this value; use 0 if it is not readable.
 3. "billDate": The date printed on the bill in exact "YYYY-MM-DD" format.
    - If the year is 2 digits (e.g. 26 or 25), convert to 4 digits (e.g. 2026).
-   - If the date is missing, blurry, or cannot be determined with certainty, set "billDate" to null.
+   - If the date is missing or unreadable, set "billDate" to null.
 4. "dateDetected": true if a date was found on the bill, false if null.
-5. "primaryCategory": The single best category matching one of: [${validCategories}].
-6. "summary": A brief 1-sentence description of what this bill is for (e.g. "Weekly groceries at D-Mart").
-7. "items": An array of individual line items if clearly listed on the bill. For each item:
-   - "name": Item description (e.g. "Sunflower Oil 1L")
-   - "amount": Price in Rupees (number)
-   - "category": Best category from [${validCategories}]
-   If line items are not distinguishable, return an empty array [].
+5. "primaryCategory": The single best category matching exactly one of: [${validCategories}].
+6. "summary": A brief 1-sentence description of the bill.
+7. "items": An array of every clearly listed line item. For each item:
+   - "name": Item description exactly as printed (e.g. "Sunflower Oil 1L").
+   - "amount": Line total in Rupees as a number. Never estimate; omit the item if the amount is unreadable.
+   - "category": The best category from [${validCategories}] based on what the item is.
+   Classify each product independently. For example, oil/milk/rice are usually Groceries or Food, detergent/cleaning products are usually Utilities or Household items when such a category exists, and clothing/electronics are Shopping.
+   If line items are not clearly distinguishable, return an empty array [].
+8. "warnings": An array of short strings for anything you could not read confidently.
+
+Rules:
+- Use ONLY the category names listed above. Never invent a category.
+- If a product does not clearly match a category, use the closest valid category.
+- Do not merge two products into one line item.
+- Do not distribute tax, discount, or unknown charges among products. Report the printed total separately.
+- Preserve duplicate product descriptions as separate line items if they appear separately.
 
 CRITICAL: Return ONLY raw JSON without markdown code fences or backticks.`;
 
@@ -450,98 +531,107 @@ CRITICAL: Return ONLY raw JSON without markdown code fences or backticks.`;
                 }
             ],
             generationConfig: {
-                temperature: 0.2,
+                temperature: 0.1,
                 responseMimeType: 'application/json'
             }
         };
 
         const result = await callGeminiDirect(payload);
         const text = result?.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
+        const parsed = parseJsonSafely(text, null);
+        const normalized = normalizeReceiptResult(parsed, categoryNames);
 
-        let parsed = {};
-        try {
-            parsed = JSON.parse(text);
-        } catch {
-            const cleaned = text.replace(/```json/g, '').replace(/```/g, '').trim();
-            parsed = JSON.parse(cleaned);
+        if (Array.isArray(parsed?.warnings)) {
+            normalized.warnings.push(
+                ...parsed.warnings
+                    .filter(warning => typeof warning === 'string' && warning.trim())
+                    .map(warning => warning.trim())
+            );
         }
 
-        const totalAmount = parseFloat(parsed.totalAmount) || 0;
-        let billDate = parsed.billDate;
-        if (billDate && !/^\d{4}-\d{2}-\d{2}$/.test(billDate)) {
-            billDate = null;
-        }
-
-        return {
-            merchant: parsed.merchant || 'Local Store',
-            totalAmount,
-            billDate,
-            dateDetected: Boolean(billDate),
-            primaryCategory: parsed.primaryCategory || 'Others',
-            summary: parsed.summary || '',
-            items: Array.isArray(parsed.items) ? parsed.items : []
-        };
+        return normalized;
     },
 
     /**
      * Parses a batch of transactional bank/UPI SMS messages into structured expenses
      */
     async parseBankSms(messages = []) {
-        if (!messages || messages.length === 0) return [];
+        if (!Array.isArray(messages) || messages.length === 0) return [];
 
         const categories = await localExpenseService.getCategories();
-        const validCategories = categories.map(c => c.name).join(', ') || 'Food, Travel, Rent, Entertainment, Shopping, Utilities, Health, Education, Others';
+        const categoryNames = categories.map(c => c.name);
+        const validCategories = categoryNames.join(', ') || 'Food, Travel, Rent, Entertainment, Shopping, Utilities, Health, Education, Others';
 
-        const smsData = messages.slice(0, 15).map(m => ({
-            id: m.id,
-            from: m.address,
-            body: m.body,
-            approxDate: new Date(m.date).toISOString().slice(0, 10)
-        }));
+        // Local privacy filter: strong exclusions never leave the device.
+        const candidates = messages
+            .filter(message => message && message.body && !isExcludedSmsBody(message.body))
+            .slice(0, 60);
 
-        const prompt = `You are a financial NLP parser for Indian banking and UPI debit messages.
-Extract valid financial debits/expenses from these SMS messages into a clean JSON array.
-Only include transactions that represent money spent/debited (ignore OTPs, credits, salary inflows, or spam).
+        if (candidates.length === 0) return [];
 
-Valid Categories to assign: [${validCategories}].
+        const buildPrompt = (smsData) => `You are a strict financial NLP parser for Indian banking and UPI messages.
+Extract only completed money-out (debit/expense) transactions from the messages below.
+
+Valid Categories to assign (use exactly one of these names): [${validCategories}].
 
 Rules:
-1. "merchant": The business, merchant, or person receiving the payment (e.g. "Swiggy", "Amazon", "Shell Petrol", "Zomato", "D-Mart", "Uber", "Electricity Board", or clean person/VPA name).
-2. "amount": The debited money amount as a positive number (e.g. 450).
-3. "date": Date in "YYYY-MM-DD" format.
-4. "category": Best matched category from [${validCategories}].
-5. "id": The exact "id" from the input SMS.
-6. "rawText": Short snippet of message.
+1. "smsId": The exact "id" from the input message.
+2. "merchant": The business, merchant, or person receiving the payment (e.g. "Swiggy", "Amazon", "Shell Petrol", "D-Mart", "Uber", "Electricity Board"). Use an empty string if it cannot be determined.
+3. "amount": The debited amount as a positive number. Never use an account balance, available balance, or credit amount.
+4. "date": Transaction date in "YYYY-MM-DD" format. Use the approxDate when the message has no explicit date.
+5. "category": Best matched category from [${validCategories}].
+6. "type": "debit" or "credit".
+7. "confidence": A number from 0 to 1 describing how certain you are.
+8. "uncertain": true if the message is ambiguous or you had to guess the merchant or amount.
+
+Exclude:
+- OTPs, login alerts, verification codes and password messages.
+- Credits, salary inflows, refunds, reversals and cashback credits.
+- Balance-only notifications.
+- Failed, declined, cancelled or reversed transactions.
+- Promotional messages and payment/collect requests.
+- Account balance amounts of any kind.
+
+If no message contains a valid debit, return an empty array [].
 
 Input SMS List:
 ${JSON.stringify(smsData, null, 2)}
 
-CRITICAL: Return ONLY a raw JSON array matching this format without markdown code blocks:
+CRITICAL: Return ONLY a raw JSON array without markdown code blocks:
 [
-  { "id": "...", "merchant": "...", "amount": 100, "date": "YYYY-MM-DD", "category": "...", "rawText": "..." }
+  { "smsId": "...", "merchant": "...", "amount": 100, "date": "YYYY-MM-DD", "category": "...", "type": "debit", "confidence": 0.9, "uncertain": false }
 ]`;
 
-        const res = await callGeminiWithRotation({
-            contents: [
-                {
-                    role: 'user',
-                    parts: [{ text: prompt }]
-                }
-            ],
-            generationConfig: {
-                temperature: 0.1,
-                responseMimeType: 'application/json'
-            }
-        });
+        const CHUNK_SIZE = 15;
+        const normalized = [];
 
-        const text = res.candidates?.[0]?.content?.parts?.[0]?.text || '[]';
-        try {
-            const parsed = JSON.parse(text);
-            return Array.isArray(parsed) ? parsed : [];
-        } catch {
-            const cleaned = text.replace(/```json/g, '').replace(/```/g, '').trim();
-            const parsed = JSON.parse(cleaned);
-            return Array.isArray(parsed) ? parsed : [];
+        for (let index = 0; index < candidates.length; index += CHUNK_SIZE) {
+            const chunk = candidates.slice(index, index + CHUNK_SIZE);
+            const smsData = chunk.map(message => ({
+                id: String(message.id),
+                from: maskSender(message.address),
+                body: redactSmsBody(message.body).slice(0, 300),
+                approxDate: dateToLocalYmd(message.date)
+            }));
+
+            const res = await callGeminiDirect({
+                contents: [
+                    {
+                        role: 'user',
+                        parts: [{ text: buildPrompt(smsData) }]
+                    }
+                ],
+                generationConfig: {
+                    temperature: 0.1,
+                    responseMimeType: 'application/json'
+                }
+            });
+
+            const text = res?.candidates?.[0]?.content?.parts?.[0]?.text || '[]';
+            const parsed = parseJsonSafely(text, []);
+            normalized.push(...normalizeSmsParse(parsed, chunk, categoryNames));
         }
+
+        return normalized;
     }
 };

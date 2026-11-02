@@ -1,4 +1,5 @@
 import { db, initLocalDatabase } from './localDatabase';
+import { buildCategoryBudgetBreakdown, computeBudgetStatus } from './financeParsers';
 
 /**
  * Local Expense Service
@@ -22,7 +23,7 @@ export const localExpenseService = {
         return await db.user_profile.toCollection().first();
     },
 
-    async login(email, password) {
+    async login(email) {
         await initLocalDatabase();
         let user = await db.user_profile.where('email').equalsIgnoreCase(email).first();
         if (!user) {
@@ -38,7 +39,7 @@ export const localExpenseService = {
         return { token: 'standalone_token_' + user.id, user };
     },
 
-    async register(name, email, password) {
+    async register(name, email) {
         await initLocalDatabase();
         let user = await db.user_profile.where('email').equalsIgnoreCase(email).first();
         if (user) {
@@ -114,34 +115,167 @@ export const localExpenseService = {
         };
     },
 
-    async create({ amount, category, description, date }) {
+    async create({ amount, category, description, date, receipt_fingerprint }) {
         const userId = await getUserId();
+        const parsedAmount = parseFloat(amount);
+        if (!Number.isFinite(parsedAmount) || parsedAmount <= 0) {
+            throw new Error('Expense amount must be greater than zero');
+        }
+        if (!category) {
+            throw new Error('Expense category is required');
+        }
+
         const newTxn = {
             user_id: userId,
-            amount: parseFloat(amount),
+            amount: parsedAmount,
             category,
             description: (description || '').trim() || null,
             date: date || new Date().toISOString().slice(0, 10),
-            created_at: new Date().toISOString()
+            created_at: new Date().toISOString(),
+            receipt_fingerprint: receipt_fingerprint || null
         };
         const id = await db.transactions.add(newTxn);
         return { ...newTxn, id };
     },
 
     async createBatch(items) {
+        if (!Array.isArray(items) || items.length === 0) {
+            throw new Error('No expenses were provided');
+        }
+
         const userId = await getUserId();
         const now = new Date().toISOString();
-        const toAdd = items.map(item => ({
-            user_id: userId,
-            amount: parseFloat(item.amount),
-            category: item.category,
-            description: (item.description || '').trim() || null,
-            date: item.date || now.slice(0, 10),
-            created_at: now
-        }));
 
-        const ids = await db.transactions.bulkAdd(toAdd, { allKeys: true });
-        return toAdd.map((item, index) => ({ ...item, id: ids[index] }));
+        const toAdd = items.map(item => {
+            const amount = parseFloat(item.amount);
+            const category = typeof item.category === 'string' ? item.category.trim() : '';
+            const date = item.date || now.slice(0, 10);
+
+            if (!Number.isFinite(amount) || amount <= 0) {
+                throw new Error('Every expense must have an amount greater than zero');
+            }
+            if (!category) {
+                throw new Error('Every expense must have a category');
+            }
+            if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+                throw new Error('Every expense must have a valid date');
+            }
+
+            return {
+                user_id: userId,
+                amount,
+                category,
+                description: (item.description || '').trim() || null,
+                date,
+                created_at: now,
+                receipt_fingerprint: item.receipt_fingerprint || null
+            };
+        });
+
+        // Atomic: either every line item is inserted or none are.
+        return await db.transaction('rw', db.transactions, async () => {
+            const ids = await db.transactions.bulkAdd(toAdd, { allKeys: true });
+            return toAdd.map((item, index) => ({ ...item, id: ids[index] }));
+        });
+    },
+
+    async receiptFingerprintExists(fingerprint) {
+        if (!fingerprint) return false;
+        const userId = await getUserId();
+        const match = await db.transactions
+            .where('receipt_fingerprint')
+            .equals(fingerprint)
+            .filter(txn => txn.user_id === userId)
+            .first();
+        return Boolean(match);
+    },
+
+    // ─── SMS DEDUPLICATION & IMPORT ───────────────────────────────────────────
+    async getProcessedSmsIds() {
+        const userId = await getUserId();
+        const rows = await db.processed_sms.where('user_id').equals(userId).toArray();
+        return rows.map(row => String(row.sms_id));
+    },
+
+    /**
+     * Inserts SMS-derived transactions and records their SMS ids in the same
+     * Dexie transaction. A message is only marked processed if its transaction
+     * was actually persisted.
+     */
+    async importSmsTransactions(items) {
+        if (!Array.isArray(items) || items.length === 0) {
+            return { created: [], skipped: [] };
+        }
+
+        const userId = await getUserId();
+        const now = new Date().toISOString();
+        const seen = new Set();
+        const normalized = [];
+
+        for (const item of items) {
+            const smsId = String(item.smsId ?? item.sms_id ?? '').trim();
+            if (!smsId || seen.has(smsId)) continue;
+            seen.add(smsId);
+
+            const amount = parseFloat(item.amount);
+            const category = typeof item.category === 'string' ? item.category.trim() : '';
+            const date = item.date;
+
+            if (!Number.isFinite(amount) || amount <= 0) continue;
+            if (!category) continue;
+            if (!/^\d{4}-\d{2}-\d{2}$/.test(date || '')) continue;
+
+            normalized.push({
+                smsId,
+                amount,
+                category,
+                date,
+                description: (item.description || item.merchant || 'Bank SMS transaction').trim()
+            });
+        }
+
+        if (normalized.length === 0) {
+            return { created: [], skipped: [] };
+        }
+
+        return await db.transaction('rw', db.transactions, db.processed_sms, async () => {
+            const existing = await db.processed_sms.where('user_id').equals(userId).toArray();
+            const existingIds = new Set(existing.map(row => String(row.sms_id)));
+
+            const fresh = normalized.filter(item => !existingIds.has(item.smsId));
+            const skipped = normalized.filter(item => existingIds.has(item.smsId)).map(item => item.smsId);
+
+            if (fresh.length === 0) {
+                return { created: [], skipped };
+            }
+
+            const toAdd = fresh.map(item => ({
+                user_id: userId,
+                amount: item.amount,
+                category: item.category,
+                description: item.description || null,
+                date: item.date,
+                created_at: now,
+                receipt_fingerprint: null,
+                sms_id: item.smsId
+            }));
+
+            const ids = await db.transactions.bulkAdd(toAdd, { allKeys: true });
+
+            await db.processed_sms.bulkAdd(
+                fresh.map((item, index) => ({
+                    user_id: userId,
+                    sms_id: item.smsId,
+                    transaction_id: ids[index],
+                    processed_at: now
+                }))
+            );
+
+            return {
+                created: toAdd.map((item, index) => ({ ...item, id: ids[index] })),
+                skipped
+            };
+        });
     },
 
     async update(id, { amount, category, description, date }) {
@@ -300,7 +434,6 @@ export const localExpenseService = {
 
         // Calculate start boundary
         const [y, m] = currentMonth.split('-').map(Number);
-        const targetDate = new Date(y, m - 1, 1);
         const priorMonths = [];
         for (let i = 1; i <= months; i++) {
             const d = new Date(y, m - 1 - i, 1);
@@ -548,35 +681,62 @@ export const localExpenseService = {
         const userId = await getUserId();
         const targetMonth = month || new Date().toISOString().slice(0, 7);
 
-        const user = await db.user_profile.get(userId);
-        const overallBudget = user ? parseFloat(user.monthly_income) || 65000 : 65000;
+        const [user, budgetsList, summary] = await Promise.all([
+            db.user_profile.get(userId),
+            db.budgets
+                .where('user_id')
+                .equals(userId)
+                .filter(b => b.month === targetMonth)
+                .toArray(),
+            this.getMonthlySummary(targetMonth)
+        ]);
 
-        const budgetsList = await db.budgets
-            .where('user_id')
-            .equals(userId)
-            .filter(b => b.month === targetMonth)
-            .toArray();
-
-        const summary = await this.getMonthlySummary(targetMonth);
+        const allRow = budgetsList.find(b => b.category === 'All');
+        const profileIncome = user ? parseFloat(user.monthly_income) : NaN;
+        const overallBudget = Number.isFinite(profileIncome) && profileIncome > 0
+            ? profileIncome
+            : (allRow ? parseFloat(allRow.budget_amount) || 0 : 0);
 
         const allocations = {};
         budgetsList.forEach(b => {
-            if (b.category !== 'All') {
-                allocations[b.category] = parseFloat(b.budget_amount);
+            if (b.category === 'All') return;
+            const amount = parseFloat(b.budget_amount);
+            if (Number.isFinite(amount) && amount > 0) {
+                allocations[b.category] = amount;
             }
         });
 
+        const spendingByCategory = {};
+        summary.categoryBreakdown.forEach(item => {
+            spendingByCategory[item.category] = {
+                total: item.total,
+                count: item.count
+            };
+        });
+
         const totalSpent = summary.totalSpending;
+        const remaining = overallBudget - totalSpent;
+        const percentUsed = overallBudget > 0 ? Math.round((totalSpent / overallBudget) * 100) : 0;
+        const isOverBudget = overallBudget > 0 && totalSpent > overallBudget;
+
+        const categoryBreakdown = buildCategoryBudgetBreakdown(allocations, spendingByCategory);
+        const status = computeBudgetStatus({
+            budgetAmount: overallBudget,
+            totalSpent,
+            categoryBreakdown
+        });
 
         return {
             month: targetMonth,
             budgetAmount: overallBudget,
             allocations,
             totalSpent,
-            remaining: overallBudget - totalSpent,
-            percentUsed: overallBudget > 0 ? Math.round((totalSpent / overallBudget) * 100) : 0,
-            isOverBudget: totalSpent > overallBudget && overallBudget > 0,
-            categoryBreakdown: summary.categoryBreakdown,
+            remaining,
+            percentUsed,
+            isOverBudget,
+            categoryBreakdown,
+            overspentCategories: status.overspentCategories,
+            status,
             hasBudget: overallBudget > 0 || budgetsList.length > 0
         };
     },

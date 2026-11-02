@@ -1,7 +1,8 @@
 import { Link } from 'react-router-dom';
 import { HiOutlineCheckCircle, HiOutlineExclamationTriangle, HiOutlineXCircle, HiOutlineArrowRight } from 'react-icons/hi2';
+import { computeBudgetStatus } from '../../services/financeParsers';
 
-const BudgetProgressBar = ({ budget, currentMonth }) => {
+const BudgetProgressBar = ({ budget }) => {
     const formatCurrency = (val) => '₹' + Math.abs(val || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 });
 
     if (!budget || !budget.hasBudget) {
@@ -26,30 +27,40 @@ const BudgetProgressBar = ({ budget, currentMonth }) => {
     }
 
     const { budgetAmount, totalSpent, remaining, percentUsed } = budget;
-    const clampedPercent = Math.min(percentUsed, 100);
+    const clampedPercent = Math.min(Math.max(percentUsed || 0, 0), 100);
 
-    // Check individual category limits
-    const categoryBreakdown = budget.categoryBreakdown || [];
-    const overspentCategories = categoryBreakdown.filter(c => (c.allocated || 0) > 0 && c.spent > c.allocated);
+    const categoryBreakdown = Array.isArray(budget.categoryBreakdown) ? budget.categoryBreakdown : [];
+    const overspentCategories = categoryBreakdown.filter(
+        row => Number(row.allocation) > 0 && Number(row.spent) > Number(row.allocation)
+    );
 
-    let statusType = 'good';
-    let statusText = 'Good: You are within your spending plan';
-    let StatusIcon = HiOutlineCheckCircle;
+    const status = budget.status || computeBudgetStatus({
+        budgetAmount,
+        totalSpent,
+        categoryBreakdown
+    });
 
-    if (percentUsed >= 100) {
-        statusType = 'danger';
-        statusText = 'Exceeded: You have spent more than your planned monthly budget';
-        StatusIcon = HiOutlineXCircle;
-    } else if (overspentCategories.length > 0) {
-        statusType = 'warning';
-        const catNames = overspentCategories.map(c => c.category).join(', ');
-        statusText = `Caution: Overall budget is under limit, but ${overspentCategories.length} ${overspentCategories.length === 1 ? 'category' : 'categories'} (${catNames}) exceeded planned limits`;
-        StatusIcon = HiOutlineExclamationTriangle;
-    } else if (percentUsed >= 80) {
-        statusType = 'warning';
-        statusText = 'Warning: Your spending is approaching the limit';
-        StatusIcon = HiOutlineExclamationTriangle;
-    }
+    const statusType = status.level === 'danger'
+        ? 'danger'
+        : status.level === 'warning'
+            ? 'warning'
+            : 'good';
+
+    const StatusIcon = statusType === 'danger'
+        ? HiOutlineXCircle
+        : statusType === 'warning'
+            ? HiOutlineExclamationTriangle
+            : HiOutlineCheckCircle;
+
+    // Keep overspent categories visible at the top of the compact list.
+    const displayCategories = [...categoryBreakdown]
+        .sort((a, b) => {
+            if (a.isOverBudget !== b.isOverBudget) return a.isOverBudget ? -1 : 1;
+            return b.spent - a.spent;
+        })
+        .slice(0, 6);
+
+    const isOver = Boolean(budget.isOverBudget) || (budgetAmount > 0 && totalSpent > budgetAmount);
 
     return (
         <div className="card">
@@ -67,18 +78,20 @@ const BudgetProgressBar = ({ budget, currentMonth }) => {
             <div className={`status-banner ${statusType}`} style={{ marginBottom: '1.25rem' }}>
                 <StatusIcon className="status-banner-icon" aria-hidden="true" />
                 <div className="status-banner-text">
-                    <strong>{statusText}</strong>
+                    <strong>{status.message}</strong>
                 </div>
             </div>
 
             {/* Overall Progress Bar */}
             <div style={{ marginBottom: '1.5rem' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem', fontSize: '0.875rem' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem', fontSize: '0.875rem', gap: '0.75rem', flexWrap: 'wrap' }}>
                     <span style={{ color: 'var(--text-secondary)' }}>
-                        <strong>{percentUsed}%</strong> of spending plan used
+                        <strong>{percentUsed || 0}%</strong> of spending plan used
                     </span>
-                    <span style={{ fontWeight: 600, color: percentUsed >= 100 ? 'var(--color-danger)' : 'var(--text-primary)' }}>
-                        {percentUsed >= 100 ? `Exceeded by ${formatCurrency(totalSpent - budgetAmount)}` : `${formatCurrency(remaining)} remaining`}
+                    <span style={{ fontWeight: 600, color: isOver ? 'var(--color-danger)' : 'var(--text-primary)' }}>
+                        {isOver
+                            ? `Exceeded by ${formatCurrency(totalSpent - budgetAmount)}`
+                            : `${formatCurrency(remaining)} remaining`}
                     </span>
                 </div>
 
@@ -100,38 +113,56 @@ const BudgetProgressBar = ({ budget, currentMonth }) => {
                 </div>
             </div>
 
-            {/* Category Allocations with horizontal bars */}
-            {budget.categoryBreakdown && budget.categoryBreakdown.length > 0 && (
+            {/* Category-specific utilisation */}
+            {displayCategories.length > 0 && (
                 <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '1rem' }}>
-                    <div style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '0.75rem' }}>
-                        Category Breakdown
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '0.75rem', gap: '0.5rem' }}>
+                        <div style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                            Category Breakdown
+                        </div>
+                        {overspentCategories.length > 0 && (
+                            <span style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--color-danger)' }}>
+                                {overspentCategories.length} over limit
+                            </span>
+                        )}
                     </div>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-                        {budget.categoryBreakdown.slice(0, 6).map((cat) => {
-                            const catBudget = budget.allocations ? (budget.allocations[cat.category] || 0) : 0;
-                            const catPercent = catBudget > 0 ? Math.round((cat.total / catBudget) * 100) : null;
-                            const clampedCat = catPercent !== null ? Math.min(catPercent, 100) : 0;
-                            const isOver = catBudget > 0 && cat.total > catBudget;
+                        {displayCategories.map((cat) => {
+                            const allocation = Number(cat.allocation) || 0;
+                            const spent = Number(cat.spent ?? cat.total) || 0;
+                            const catPercent = allocation > 0
+                                ? Math.round((spent / allocation) * 100)
+                                : null;
+                            const clampedCat = catPercent !== null ? Math.min(Math.max(catPercent, 0), 100) : 0;
+                            const categoryIsOver = allocation > 0 && spent > allocation;
 
                             return (
                                 <div key={cat.category} style={{ fontSize: '0.875rem' }}>
-                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.25rem' }}>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.25rem', gap: '0.5rem' }}>
                                         <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>
                                             {cat.category}
                                         </span>
-                                        <span style={{ color: isOver ? 'var(--color-danger)' : 'var(--text-secondary)', fontWeight: isOver ? 700 : 500 }}>
-                                            <span className="num">{formatCurrency(cat.total)}</span>
-                                            {catBudget > 0 && (
-                                                <span style={{ color: 'var(--text-muted)' }}> / {formatCurrency(catBudget)} ({catPercent}%)</span>
+                                        <span style={{ color: categoryIsOver ? 'var(--color-danger)' : 'var(--text-secondary)', fontWeight: categoryIsOver ? 700 : 500, textAlign: 'right' }}>
+                                            <span className="num">{formatCurrency(spent)}</span>
+                                            {allocation > 0 ? (
+                                                <span style={{ color: categoryIsOver ? 'var(--color-danger)' : 'var(--text-muted)' }}>
+                                                    {' / '}{formatCurrency(allocation)} ({catPercent}%)
+                                                </span>
+                                            ) : (
+                                                <span style={{ color: 'var(--text-muted)' }}> (no limit)</span>
                                             )}
                                         </span>
                                     </div>
-                                    {catBudget > 0 && (
+                                    {allocation > 0 ? (
                                         <div className="progress-bar-container" style={{ height: '6px' }}>
                                             <div
-                                                className={`progress-bar ${isOver ? 'danger' : (catPercent >= 80 ? 'warning' : '')}`}
+                                                className={`progress-bar ${categoryIsOver ? 'danger' : (catPercent >= 80 ? 'warning' : '')}`}
                                                 style={{ width: `${clampedCat}%` }}
                                             />
+                                        </div>
+                                    ) : (
+                                        <div className="progress-bar-container" style={{ height: '6px', opacity: 0.35 }}>
+                                            <div className="progress-bar" style={{ width: '4%' }} />
                                         </div>
                                     )}
                                 </div>

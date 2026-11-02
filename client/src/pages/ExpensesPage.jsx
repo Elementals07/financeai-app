@@ -86,7 +86,7 @@ const ExpensesPage = () => {
             }
 
             setHasMore(newExpenses.length === 25);
-        } catch (err) {
+        } catch {
             toast.error('Failed to load expenses');
         } finally {
             setLoading(false);
@@ -123,7 +123,7 @@ const ExpensesPage = () => {
             setExpenses(prev => prev.filter(e => e.id !== id));
             setDeletingId(null);
             toast.success('Expense deleted');
-        } catch (err) {
+        } catch {
             toast.error('Failed to delete expense');
         }
     };

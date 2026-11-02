@@ -7,6 +7,7 @@ import API from '../api/axios';
 
 const AuthContext = createContext(null);
 
+// eslint-disable-next-line react-refresh/only-export-components
 export const useAuth = () => {
     const context = useContext(AuthContext);
     if (!context) throw new Error('useAuth must be used within AuthProvider');
@@ -47,7 +48,7 @@ export const AuthProvider = ({ children }) => {
                         setUser(res.data.data);
                         localStorage.setItem('user', JSON.stringify(res.data.data));
                     }
-                } catch (err) {
+                } catch {
                     if (isMounted) {
                         localStorage.removeItem('token');
                         localStorage.removeItem('user');

@@ -1,91 +1,56 @@
 import { Capacitor } from '@capacitor/core';
-import localGeminiService from './localGeminiService';
+import { localGeminiService } from './localGeminiService';
+import { localExpenseService } from './localExpenseService';
+import { isExcludedSmsBody } from './financeParsers';
 
-const PROCESSED_SMS_KEY = 'financeai_processed_sms_ids';
+const MAX_MESSAGES = 60;
 
-function getProcessedIds() {
-    try {
-        const stored = localStorage.getItem(PROCESSED_SMS_KEY);
-        return stored ? JSON.parse(stored) : [];
-    } catch {
-        return [];
-    }
+function dedupeById(messages) {
+    const seen = new Set();
+    return messages.filter(message => {
+        const id = String(message?.id ?? '');
+        if (!id || seen.has(id)) return false;
+        seen.add(id);
+        return true;
+    });
 }
-
-function saveProcessedId(id) {
-    try {
-        const ids = getProcessedIds();
-        if (!ids.includes(String(id))) {
-            ids.push(String(id));
-            localStorage.setItem(PROCESSED_SMS_KEY, JSON.stringify(ids.slice(-300))); // keep last 300
-        }
-    } catch (e) {
-        console.error('Failed to save processed SMS id', e);
-    }
-}
-
-// Sample fallback bank messages for testing/demo on web or when no SMS found
-const SAMPLE_BANK_SMS = [
-    {
-        id: 'mock-1',
-        address: 'VM-HDFCBK',
-        body: 'Alert: Rs 340.00 debited from A/C **1204 to Swiggy on 01-Nov-26 via UPI Ref 630419482. Avl Bal Rs 42,100.',
-        date: Date.now() - 3600000 * 2
-    },
-    {
-        id: 'mock-2',
-        address: 'VK-SBIINB',
-        body: 'Dear SBI User, your A/C 9081 has a debit of INR 1,299.00 on 31-Oct-26 towards Amazon India. UPI: 6301289410.',
-        date: Date.now() - 3600000 * 24
-    },
-    {
-        id: 'mock-3',
-        address: 'AX-AXISBK',
-        body: 'Paid Rs 750.00 to Shell Petrol Pump via UPI Ref 62981745 on 30-Oct-26 from Axis Bank A/C *445.',
-        date: Date.now() - 3600000 * 48
-    }
-];
 
 export const smsService = {
+    isAvailable() {
+        return Capacitor.isNativePlatform() && Boolean(Capacitor.Plugins.SmsReader);
+    },
+
     /**
-     * Reads recent bank/UPI debit messages from device SMS inbox
-     * Filters out already imported/processed transactions
+     * Reads recent bank/UPI debit messages from the device inbox, excluding
+     * messages already persisted as transactions and strong non-transaction
+     * patterns. No message content is logged here.
      */
     async fetchRecentBankSms(days = 30) {
-        const processedIds = getProcessedIds();
-        let rawMessages = [];
-
-        if (Capacitor.isNativePlatform() && Capacitor.Plugins.SmsReader) {
-            try {
-                const res = await Capacitor.Plugins.SmsReader.getRecentBankSms({ days });
-                rawMessages = res.messages || [];
-            } catch (err) {
-                console.warn('Native SMS Reader error or permission denied:', err);
-                throw err;
-            }
-        } else {
-            // Web fallback
-            rawMessages = SAMPLE_BANK_SMS;
+        if (!this.isAvailable()) {
+            throw new Error('Bank SMS sync is only available in the FinanceAI Android app.');
         }
 
-        // Filter out already processed messages
-        const unparsed = rawMessages.filter(m => !processedIds.includes(String(m.id)));
-        return unparsed;
+        const safeDays = Math.min(Math.max(parseInt(days, 10) || 30, 1), 90);
+        const res = await Capacitor.Plugins.SmsReader.getRecentBankSms({ days: safeDays });
+        const rawMessages = Array.isArray(res?.messages) ? res.messages : [];
+
+        const processedIds = new Set(await localExpenseService.getProcessedSmsIds());
+
+        const candidates = dedupeById(rawMessages)
+            .filter(message => message && message.body)
+            .filter(message => !isExcludedSmsBody(message.body))
+            .filter(message => !processedIds.has(String(message.id)))
+            .slice(0, MAX_MESSAGES);
+
+        return candidates;
     },
 
     /**
-     * Sends raw messages to Gemini to extract structured expenses
+     * Sends only locally filtered messages to Gemini for structured parsing.
      */
     async analyzeSmsWithAI(messages) {
-        if (!messages || messages.length === 0) return [];
+        if (!Array.isArray(messages) || messages.length === 0) return [];
         return await localGeminiService.parseBankSms(messages);
-    },
-
-    /**
-     * Mark an SMS ID as processed
-     */
-    markProcessed(id) {
-        saveProcessedId(id);
     }
 };
 

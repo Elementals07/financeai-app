@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import API from '../api/axios';
 import toast from 'react-hot-toast';
 
@@ -66,14 +66,16 @@ export const useCategories = () => {
     };
 
     // Helper map for quick color lookups
-    const colorMap = categories.reduce((map, cat) => {
+    const colorMap = useMemo(() => categories.reduce((map, cat) => {
         map[cat.name] = cat.color;
         return map;
-    }, {});
+    }, {}), [categories]);
+
+    const categoryNames = useMemo(() => categories.map(c => c.name), [categories]);
 
     return {
         categories,
-        categoryNames: categories.map(c => c.name),
+        categoryNames,
         colorMap,
         loading,
         fetchCategories,

@@ -8,8 +8,6 @@ import MonthlyTrendChart from '../components/Dashboard/MonthlyTrendChart';
 import DailyExpenseChart from '../components/Dashboard/DailyExpenseChart';
 import BudgetProgressBar from '../components/Dashboard/BudgetProgressBar';
 import ExpenseForm from '../components/Expenses/ExpenseForm';
-import SmsTransactionModal from '../components/Expenses/SmsTransactionModal';
-import smsService from '../services/smsService';
 import { 
     HiOutlinePlus, 
     HiOutlineCalendar, 
@@ -46,7 +44,7 @@ const DashboardPage = () => {
             });
             setBudget(budgetRes.data.data);
             setRecentExpenses(recentRes.data.data || []);
-        } catch (err) {
+        } catch {
             toast.error('Failed to load dashboard data');
         } finally {
             setLoading(false);
@@ -179,10 +177,7 @@ const DashboardPage = () => {
             {/* B. Core Operational Grid: Budget Progress & Largest Category Insight */}
             <div className="charts-grid" style={{ marginBottom: '1.5rem' }}>
                 {/* Budget Progress & Status */}
-                <BudgetProgressBar 
-                    budget={budget} 
-                    currentMonth={currentMonth} 
-                />
+                <BudgetProgressBar budget={budget} />
 
                 {/* Largest Spending Callout & Category Distribution */}
                 <div className="card">

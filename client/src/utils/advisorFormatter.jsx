@@ -119,7 +119,7 @@ export function AdvisorMarkdown({ content }) {
         // Header Level 3 (###)
         if (/^###\s+/.test(line)) {
             const title = line.replace(/^###\s+/, '').replace(/\*\*/g, '');
-            if (/^[🛑🚨🟢🟡💡⚡🎯📌🔍⚠️✅]/.test(title)) {
+            if (/^(?:🛑|🚨|🟢|🟡|💡|⚡|🎯|📌|🔍|⚠️|✅)/u.test(title)) {
                 elements.push(
                     <div key={key} className="adv-verdict-banner">
                         {parseInline(title, key)}
@@ -147,7 +147,7 @@ export function AdvisorMarkdown({ content }) {
         }
 
         // Callout boxes with leading emoji: 💡, 🚨, ⚠️, 📌, ✅, 🎯
-        const calloutMatch = line.match(/^([💡🚨⚠️📌✅🎯])\s+(.*)$/);
+        const calloutMatch = line.match(/^(💡|🚨|⚠️|📌|✅|🎯)\s+(.*)$/u);
         if (calloutMatch) {
             const emoji = calloutMatch[1];
             const textContent = calloutMatch[2];
@@ -192,10 +192,10 @@ export function AdvisorMarkdown({ content }) {
         }
 
         // Bullet diagnosis / breakdown items: "* 🚨 **Rent:** ..." or "* **Food:** ..."
-        const bulletMatch = line.match(/^[\*\-]\s+(.*)$/);
+        const bulletMatch = line.match(/^[*-]\s+(.*)$/u);
         if (bulletMatch) {
             const content = bulletMatch[1];
-            const emojiBullet = content.match(/^([🚨⚠️✅💡📌🎯])\s+(.*)$/);
+            const emojiBullet = content.match(/^(🚨|⚠️|✅|💡|📌|🎯)\s+(.*)$/u);
             if (emojiBullet) {
                 elements.push(
                     <div key={key} className="adv-diag-item">
@@ -229,6 +229,7 @@ export function AdvisorMarkdown({ content }) {
  * Backward compatibility export:
  * If any caller still passes a string to renderAdvisorMarkdown, it returns safe text.
  */
+// eslint-disable-next-line react-refresh/only-export-components
 export function renderAdvisorMarkdown(text) {
     if (!text) return '';
     // Escapes all HTML characters for safe string rendering if invoked

@@ -52,7 +52,7 @@ const LoginForm = () => {
             await login(DEMO_EMAIL, DEMO_PASS);
             toast.success('Logged in as demo user');
             navigate('/');
-        } catch (err) {
+        } catch {
             setErrorMsg('Demo account login failed. You can create a new account below.');
             toast.error('Demo login failed');
         } finally {
