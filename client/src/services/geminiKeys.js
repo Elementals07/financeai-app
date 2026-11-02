@@ -1,7 +1,7 @@
 export const MAX_GEMINI_KEYS = 5;
 export const GEMINI_KEYS_STORAGE_KEY = 'financeai_gemini_api_keys';
 
-const GEMINI_KEY_PATTERN = /^[A-Za-z0-9_-]+$/;
+const GEMINI_KEY_PATTERN = /^[A-Za-z0-9._-]+$/;
 
 function resolveStorage(storage) {
     if (storage !== undefined) return storage;
