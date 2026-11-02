@@ -8,12 +8,15 @@ import MonthlyTrendChart from '../components/Dashboard/MonthlyTrendChart';
 import DailyExpenseChart from '../components/Dashboard/DailyExpenseChart';
 import BudgetProgressBar from '../components/Dashboard/BudgetProgressBar';
 import ExpenseForm from '../components/Expenses/ExpenseForm';
+import SmsTransactionModal from '../components/Expenses/SmsTransactionModal';
+import smsService from '../services/smsService';
 import { 
     HiOutlinePlus, 
     HiOutlineCalendar, 
     HiOutlineArrowRight,
     HiOutlineSparkles,
-    HiOutlineTag
+    HiOutlineTag,
+    HiOutlineCreditCard
 } from 'react-icons/hi2';
 import toast from 'react-hot-toast';
 

@@ -481,5 +481,67 @@ CRITICAL: Return ONLY raw JSON without markdown code fences or backticks.`;
             summary: parsed.summary || '',
             items: Array.isArray(parsed.items) ? parsed.items : []
         };
+    },
+
+    /**
+     * Parses a batch of transactional bank/UPI SMS messages into structured expenses
+     */
+    async parseBankSms(messages = []) {
+        if (!messages || messages.length === 0) return [];
+
+        const categories = await localExpenseService.getCategories();
+        const validCategories = categories.map(c => c.name).join(', ') || 'Food, Travel, Rent, Entertainment, Shopping, Utilities, Health, Education, Others';
+
+        const smsData = messages.slice(0, 15).map(m => ({
+            id: m.id,
+            from: m.address,
+            body: m.body,
+            approxDate: new Date(m.date).toISOString().slice(0, 10)
+        }));
+
+        const prompt = `You are a financial NLP parser for Indian banking and UPI debit messages.
+Extract valid financial debits/expenses from these SMS messages into a clean JSON array.
+Only include transactions that represent money spent/debited (ignore OTPs, credits, salary inflows, or spam).
+
+Valid Categories to assign: [${validCategories}].
+
+Rules:
+1. "merchant": The business, merchant, or person receiving the payment (e.g. "Swiggy", "Amazon", "Shell Petrol", "Zomato", "D-Mart", "Uber", "Electricity Board", or clean person/VPA name).
+2. "amount": The debited money amount as a positive number (e.g. 450).
+3. "date": Date in "YYYY-MM-DD" format.
+4. "category": Best matched category from [${validCategories}].
+5. "id": The exact "id" from the input SMS.
+6. "rawText": Short snippet of message.
+
+Input SMS List:
+${JSON.stringify(smsData, null, 2)}
+
+CRITICAL: Return ONLY a raw JSON array matching this format without markdown code blocks:
+[
+  { "id": "...", "merchant": "...", "amount": 100, "date": "YYYY-MM-DD", "category": "...", "rawText": "..." }
+]`;
+
+        const res = await callGeminiWithRotation({
+            contents: [
+                {
+                    role: 'user',
+                    parts: [{ text: prompt }]
+                }
+            ],
+            generationConfig: {
+                temperature: 0.1,
+                responseMimeType: 'application/json'
+            }
+        });
+
+        const text = res.candidates?.[0]?.content?.parts?.[0]?.text || '[]';
+        try {
+            const parsed = JSON.parse(text);
+            return Array.isArray(parsed) ? parsed : [];
+        } catch {
+            const cleaned = text.replace(/```json/g, '').replace(/```/g, '').trim();
+            const parsed = JSON.parse(cleaned);
+            return Array.isArray(parsed) ? parsed : [];
+        }
     }
 };

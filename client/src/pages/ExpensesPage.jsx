@@ -3,12 +3,15 @@ import API from '../api/axios';
 import ExpenseForm from '../components/Expenses/ExpenseForm';
 import ExpenseList from '../components/Expenses/ExpenseList';
 import BillScannerModal from '../components/Expenses/BillScannerModal';
+import SmsTransactionModal from '../components/Expenses/SmsTransactionModal';
+import smsService from '../services/smsService';
 import toast from 'react-hot-toast';
 import { 
     HiOutlinePlus, 
     HiOutlineCamera, 
     HiOutlineFunnel,
-    HiOutlineArrowDownTray
+    HiOutlineArrowDownTray,
+    HiOutlineCreditCard
 } from 'react-icons/hi2';
 import { useCategories } from '../hooks/useCategories';
 
@@ -23,6 +26,9 @@ const ExpensesPage = () => {
     const [hasMore, setHasMore] = useState(true);
     const [showForm, setShowForm] = useState(false);
     const [showScanner, setShowScanner] = useState(false);
+    const [showSmsModal, setShowSmsModal] = useState(false);
+    const [smsTransactions, setSmsTransactions] = useState([]);
+    const [scanningSms, setScanningSms] = useState(false);
     const [editExpense, setEditExpense] = useState(null);
     const [deletingId, setDeletingId] = useState(null);
     
@@ -119,6 +125,36 @@ const ExpensesPage = () => {
             toast.success('Expense deleted');
         } catch (err) {
             toast.error('Failed to delete expense');
+        }
+    };
+
+    const handleScanSms = async () => {
+        setScanningSms(true);
+        const toastId = toast.loading('Reading bank & UPI messages...');
+        try {
+            const messages = await smsService.fetchRecentBankSms(30);
+            if (messages.length === 0) {
+                toast.dismiss(toastId);
+                toast.success('No new untracked bank messages found!');
+                return;
+            }
+
+            toast.loading(`Found ${messages.length} messages. AI categorizing...`, { id: toastId });
+            const parsed = await smsService.analyzeSmsWithAI(messages);
+            toast.dismiss(toastId);
+
+            if (parsed.length === 0) {
+                toast('No debit transactions found in messages.', { icon: 'ℹ️' });
+                return;
+            }
+
+            setSmsTransactions(parsed);
+            setShowSmsModal(true);
+        } catch (err) {
+            toast.dismiss(toastId);
+            toast.error('Could not scan SMS: ' + (err.message || 'Permission denied'));
+        } finally {
+            setScanningSms(false);
         }
     };
 
@@ -224,11 +260,25 @@ const ExpensesPage = () => {
                     </div>
                 </div>
 
-                {/* Subtotal callout for currently filtered view */}
-                <div style={{ marginTop: '0.75rem', paddingTop: '0.75rem', borderTop: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.85rem' }}>
-                    <span style={{ color: 'var(--text-secondary)' }}>
-                        <strong>{expenses.length}</strong> {expenses.length === 1 ? 'item' : 'items'}
-                    </span>
+                {/* Subtotal callout with Fast SMS Sync */}
+                <div style={{ marginTop: '0.75rem', paddingTop: '0.75rem', borderTop: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.85rem', flexWrap: 'wrap', gap: '8px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                        <span style={{ color: 'var(--text-secondary)' }}>
+                            <strong>{expenses.length}</strong> {expenses.length === 1 ? 'item' : 'items'}
+                        </span>
+                        <button
+                            type="button"
+                            className="btn btn-sm btn-outline"
+                            onClick={handleScanSms}
+                            disabled={scanningSms}
+                            title="Auto-scan bank & UPI debit SMS"
+                            style={{ height: '28px', padding: '0 8px', fontSize: '0.75rem', borderRadius: 'var(--radius-full)' }}
+                        >
+                            <HiOutlineCreditCard aria-hidden="true" style={{ color: 'var(--color-primary)' }} />
+                            <span>{scanningSms ? 'Scanning...' : 'Sync Bank SMS'}</span>
+                        </button>
+                    </div>
+
                     <span style={{ color: 'var(--text-primary)' }}>
                         Total: <strong className="num" style={{ color: '#9B1C1C', fontSize: '1.05rem', fontWeight: 700 }}>₹{totalFilteredAmount.toLocaleString('en-IN', { maximumFractionDigits: 0 })}</strong>
                     </span>
@@ -278,8 +328,35 @@ const ExpensesPage = () => {
                 />
             )}
 
+            {/* AI SMS Transaction Tracker Modal */}
+            {showSmsModal && (
+                <SmsTransactionModal
+                    transactions={smsTransactions}
+                    onClose={() => setShowSmsModal(false)}
+                    onSaved={() => fetchExpenses(1, false)}
+                />
+            )}
+
             {/* Mobile Floating Action Buttons */}
             <div className="mobile-fab-group">
+                <button
+                    type="button"
+                    className="mobile-fab"
+                    onClick={handleScanSms}
+                    disabled={scanningSms}
+                    aria-label="Scan Bank SMS"
+                    title="Sync Bank SMS"
+                    style={{
+                        width: '42px',
+                        height: '42px',
+                        background: 'linear-gradient(135deg, #4F46E5, #06B6D4)',
+                        fontSize: '1.2rem',
+                        boxShadow: '0 3px 12px rgba(79, 70, 229, 0.4)',
+                        alignSelf: 'center'
+                    }}
+                >
+                    <HiOutlineCreditCard aria-hidden="true" />
+                </button>
                 <button
                     type="button"
                     className="mobile-fab mobile-fab-secondary"

@@ -417,45 +417,67 @@ const BillScannerModal = ({ onClose, onSuccess }) => {
                                     </div>
 
                                     {splitItems && (
-                                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', background: 'var(--bg-surface-subtle)', padding: '0.75rem', borderRadius: 'var(--radius-sm)' }}>
+                                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.625rem', background: 'var(--bg-surface-subtle)', padding: '0.75rem', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)' }}>
                                             {items.map((item, idx) => (
-                                                <div key={idx} style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-                                                    <input
-                                                        type="text"
-                                                        value={item.name}
-                                                        onChange={(e) => handleItemChange(idx, 'name', e.target.value)}
-                                                        placeholder="Item name"
-                                                        className="form-input"
-                                                        style={{ flex: 2, height: '36px', fontSize: '0.8125rem' }}
-                                                    />
-                                                    <input
-                                                        type="number"
-                                                        step="any"
-                                                        value={item.amount}
-                                                        onChange={(e) => handleItemChange(idx, 'amount', e.target.value)}
-                                                        placeholder="Amount"
-                                                        className="form-input num"
-                                                        style={{ flex: 1, height: '36px', fontSize: '0.8125rem' }}
-                                                    />
-                                                    <button
-                                                        type="button"
-                                                        className="btn btn-outline btn-sm"
-                                                        onClick={() => handleRemoveItem(idx)}
-                                                        aria-label="Remove item"
-                                                        style={{ minWidth: '36px', height: '36px', padding: 0 }}
-                                                    >
-                                                        <HiOutlineTrash aria-hidden="true" />
-                                                    </button>
+                                                <div key={idx} style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', background: 'var(--bg-surface)', padding: '0.5rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)' }}>
+                                                    <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                                                        <input
+                                                            type="text"
+                                                            value={item.name}
+                                                            onChange={(e) => handleItemChange(idx, 'name', e.target.value)}
+                                                            placeholder="Item name (e.g. Snacks, Shirt)"
+                                                            className="form-input"
+                                                            style={{ flex: 1, height: '34px', fontSize: '0.8125rem' }}
+                                                        />
+                                                        <button
+                                                            type="button"
+                                                            className="btn btn-outline btn-sm"
+                                                            onClick={() => handleRemoveItem(idx)}
+                                                            aria-label="Remove item"
+                                                            style={{ minWidth: '34px', height: '34px', padding: 0, color: 'var(--color-danger)' }}
+                                                        >
+                                                            <HiOutlineTrash aria-hidden="true" />
+                                                        </button>
+                                                    </div>
+                                                    <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                                                        <select
+                                                            value={item.category || category}
+                                                            onChange={(e) => handleItemChange(idx, 'category', e.target.value)}
+                                                            className="form-select"
+                                                            style={{ flex: 1.4, height: '34px', fontSize: '0.8125rem', padding: '0 6px' }}
+                                                            aria-label="Item category"
+                                                        >
+                                                            {categoryNames.map(c => (
+                                                                <option key={c} value={c}>{c}</option>
+                                                            ))}
+                                                        </select>
+                                                        <div className="input-amount-wrapper" style={{ flex: 1 }}>
+                                                            <span style={{ position: 'absolute', left: '8px', fontSize: '0.8125rem', fontWeight: 600, color: 'var(--text-secondary)' }}>₹</span>
+                                                            <input
+                                                                type="number"
+                                                                step="any"
+                                                                value={item.amount}
+                                                                onChange={(e) => handleItemChange(idx, 'amount', e.target.value)}
+                                                                placeholder="Amount"
+                                                                className="form-input num"
+                                                                style={{ paddingLeft: '1.4rem', height: '34px', fontSize: '0.8125rem' }}
+                                                            />
+                                                        </div>
+                                                    </div>
                                                 </div>
                                             ))}
-                                            <button
-                                                type="button"
-                                                className="btn btn-outline btn-sm"
-                                                onClick={handleAddItem}
-                                                style={{ alignSelf: 'flex-start', marginTop: '0.25rem' }}
-                                            >
-                                                <HiOutlinePlus aria-hidden="true" /> Add Line Item
-                                            </button>
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '0.25rem' }}>
+                                                <button
+                                                    type="button"
+                                                    className="btn btn-outline btn-sm"
+                                                    onClick={handleAddItem}
+                                                >
+                                                    <HiOutlinePlus aria-hidden="true" /> Add Item
+                                                </button>
+                                                <span style={{ fontSize: '0.8125rem', fontWeight: 600, color: 'var(--text-secondary)' }}>
+                                                    Items Total: <strong className="num" style={{ color: 'var(--color-primary)' }}>₹{itemsTotal.toLocaleString('en-IN', { maximumFractionDigits: 0 })}</strong>
+                                                </span>
+                                            </div>
                                         </div>
                                     )}
                                 </div>

@@ -28,14 +28,23 @@ const BudgetProgressBar = ({ budget, currentMonth }) => {
     const { budgetAmount, totalSpent, remaining, percentUsed } = budget;
     const clampedPercent = Math.min(percentUsed, 100);
 
+    // Check individual category limits
+    const categoryBreakdown = budget.categoryBreakdown || [];
+    const overspentCategories = categoryBreakdown.filter(c => (c.allocated || 0) > 0 && c.spent > c.allocated);
+
     let statusType = 'good';
     let statusText = 'Good: You are within your spending plan';
     let StatusIcon = HiOutlineCheckCircle;
 
     if (percentUsed >= 100) {
         statusType = 'danger';
-        statusText = 'Exceeded: You have spent more than your planned amount';
+        statusText = 'Exceeded: You have spent more than your planned monthly budget';
         StatusIcon = HiOutlineXCircle;
+    } else if (overspentCategories.length > 0) {
+        statusType = 'warning';
+        const catNames = overspentCategories.map(c => c.category).join(', ');
+        statusText = `Caution: Overall budget is under limit, but ${overspentCategories.length} ${overspentCategories.length === 1 ? 'category' : 'categories'} (${catNames}) exceeded planned limits`;
+        StatusIcon = HiOutlineExclamationTriangle;
     } else if (percentUsed >= 80) {
         statusType = 'warning';
         statusText = 'Warning: Your spending is approaching the limit';
