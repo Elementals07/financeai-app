@@ -1,7 +1,7 @@
 /**
  * Standalone Local API Adapter
- * 100% on-device routing using Dexie (IndexedDB) and direct Gemini REST.
- * ZERO server or localhost:5000 dependency.
+ * Financial data is routed on-device through Dexie (IndexedDB). AI requests are
+ * orchestrated locally but sent to the FinanceAI AI proxy, which holds the keys.
  */
 import { localExpenseService } from '../services/localExpenseService';
 import { localGeminiService } from '../services/localGeminiService';

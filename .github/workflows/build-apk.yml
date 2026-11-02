@@ -38,6 +38,8 @@ jobs:
 
       - name: Build Web Bundle
         working-directory: ./client
+        env:
+          VITE_AI_API_URL: ${{ secrets.AI_API_URL }}
         run: |
           npm install
           npm run build
@@ -70,17 +72,17 @@ jobs:
         if: github.ref == 'refs/heads/main'
         with:
           tag_name: v1.0.0
-          name: "FinanceAI Mobile v1.0.0 (100% Standalone - Zero PC Dependency)"
+          name: "FinanceAI Mobile v1.0.0 (Local-First with Server-Only AI Keys)"
           draft: false
           prerelease: false
           token: ${{ secrets.GITHUB_TOKEN }}
           body: |
-            ### 📱 FinanceAI Autonomous Mobile App v1.0.0
+            ### 📱 FinanceAI Mobile App v1.0.0
 
-            **100% Standalone Mobile Finance App — Zero PC or Node.js Dependency:**
+            **Local-first finance data with a server-side AI proxy:**
             - 💾 **On-Device Dexie / IndexedDB**: All expenses, budgets, categories, and historical data stored locally.
             - 📊 **Local Analytics Engine**: Monthly summaries, category baselines, micro-leakage detection, and multi-year trend calculations run 100% on-device.
-            - 🤖 **Direct-to-Gemini REST**: Calls Google Gemini APIs directly over HTTPS with automatic 5-key rotation fallback.
+            - 🤖 **Server-Proxied Gemini**: AI requests use a central proxy with automatic five-key rotation. Gemini keys are never bundled in the APK.
             - 📸 **Native Receipt Scanner**: Instant receipt scanning via device camera or gallery powered by Gemini Vision OCR.
             - 🎨 **Unified Design System**: Retains the polished Indigo (`#2D3FBF`) and Teal (`#0EA5C9`) design system with mobile safe-areas.
             

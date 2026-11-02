@@ -46,7 +46,7 @@ export const smsService = {
     },
 
     /**
-     * Sends only locally filtered messages to Gemini for structured parsing.
+     * Sends only locally filtered messages to the AI backend for structured parsing.
      */
     async analyzeSmsWithAI(messages) {
         if (!Array.isArray(messages) || messages.length === 0) return [];

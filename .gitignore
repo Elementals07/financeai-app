@@ -1,6 +1,7 @@
 # Dependencies
 node_modules/
 client/node_modules/
+server/node_modules/
 
 # Production build outputs
 client/dist/
@@ -17,6 +18,8 @@ client/android/.cxx/
 # Environment
 .env
 .env.local
+server/.env
+client/.env
 
 # Logs
 npm-debug.log*

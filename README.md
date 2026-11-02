@@ -1,8 +1,8 @@
 # FinanceAI
 
-FinanceAI is a local-first personal finance app for Android, built with React, Capacitor and Dexie (IndexedDB). Expenses, budgets, categories and imported bank-SMS history are stored on the device. There is no Node.js, MongoDB, MySQL or Postgres server.
+FinanceAI is a local-first personal finance app for Android, built with React, Capacitor and Dexie (IndexedDB). Expenses, budgets, categories and imported bank-SMS history are stored on the device. There is no financial-data server and no MySQL, MongoDB or Postgres database.
 
-The app can work without a network connection for everything except AI features. Receipt scanning, SMS parsing and the AI advisor call Google Gemini directly over HTTPS.
+The app can work without a network connection for everything except AI features. Receipt scanning, SMS parsing and the AI advisor call a small FinanceAI AI proxy over HTTPS; that proxy holds the Gemini keys and forwards requests to Google. The proxy does not store financial data.
 
 This README is written for two audiences:
 
@@ -19,10 +19,10 @@ The current release adds the following changes:
 - **Receipt reconciliation:** the receipt total and the sum of line items are shown separately. If they differ, the user must explicitly confirm the difference before saving. The difference is never silently spread across products.
 - **Receipt duplicate protection:** a deterministic receipt fingerprint is stored on saved transactions. Re-saving the same receipt requires a second confirmation.
 - **Category-aware budgets:** the dashboard now reports overall overspending, category overspending, or 80% budget usage with clear messages. Categories without a limit are handled safely.
-- **Bank/UPI SMS import on Android:** bank debit SMS can be read after permission is granted, filtered locally, redacted, parsed by Gemini, reviewed in a modal, and imported atomically.
+- **Bank/UPI SMS import on Android:** bank debit SMS can be read after permission is granted, filtered locally, redacted, parsed by the AI proxy, reviewed in a modal, and imported atomically.
 - **Durable SMS deduplication:** processed SMS IDs are stored in Dexie, so reopening the app does not import the same message again. An SMS is marked processed only after its transaction is saved successfully.
-- **Gemini key cleanup:** hardcoded API keys were removed. Keys are now read from device storage or from build-time environment variables, and the security limitations are documented below.
-- **Tests and build hygiene:** pure parsing, receipt and budget logic is covered by 15 Node tests. ESLint no longer scans generated Android bundles.
+- **Server-only Gemini keys:** AI traffic now goes through the included AI proxy. The app no longer reads, stores or bundles Gemini keys, and the proxy rotates up to five server-side keys automatically.
+- **Tests and build hygiene:** pure parsing, receipt and budget logic is covered by 15 client tests, and proxy routing/rotation/error handling by 14 server tests. ESLint no longer scans generated Android bundles.
 - **Refreshed APK:** `apk/FinanceAI.apk` was rebuilt from the current source.
 
 Latest implementation commit at the time of writing: `86c5842 feat: add receipt splitting, category budgets, and SMS import`.
@@ -52,33 +52,42 @@ npm run dev
 
 The web version supports expenses, budgets, categories and the AI pages. Bank SMS import is Android-only because browsers cannot read the SMS inbox.
 
-### Configure Gemini before using AI features
+### Start the AI proxy before using AI features
 
-AI features need a Gemini API key. Without a key, the local parts of the app still work, but receipt scanning, SMS parsing and the AI advisor show an error.
+AI features need the included proxy. Without it, the local parts of the app still work, but receipt scanning, SMS parsing and the AI advisor show an error.
 
-This project has no in-app key settings screen. Use one of these methods:
-
-1. **Build-time environment variables (simplest for personal use)**
-   - Create `client/.env` and add:
+1. **Create the server environment file**
+   - Copy `server/.env.example` to `server/.env`.
+   - Add up to five server-only keys:
      ```dotenv
-     VITE_GEMINI_API_KEYS=KEY_ONE,KEY_TWO
+     GEMINI_API_KEY_1=YOUR_FIRST_KEY
+     GEMINI_API_KEY_2=YOUR_SECOND_KEY
+     GEMINI_API_KEY_3=
+     GEMINI_API_KEY_4=
+     GEMINI_API_KEY_5=
      ```
-   - Rebuild and reinstall the APK.
-   - Vite inlines `VITE_*` values into the JavaScript bundle. Anyone who extracts the APK can read the key. Only do this for a personal build that you do not distribute.
-2. **Device localStorage (runtime, no rebuild)**
-   - In a browser, open DevTools and run:
-     ```js
-     localStorage.setItem('financeai_gemini_api_keys', JSON.stringify(['KEY_ONE', 'KEY_TWO']));
+   - Never put these keys in `client/`, Vite variables, localStorage or Git.
+
+2. **Install and start the proxy**
+   ```bash
+   cd server
+   npm install
+   npm run dev
+   ```
+   The proxy listens on `http://localhost:5000` by default. Check `http://localhost:5000/api/health`.
+
+3. **Point the app at the proxy**
+   - Web development uses `http://localhost:5000/api/ai` by default.
+   - To override it, create `client/.env`:
+     ```dotenv
+     VITE_AI_API_URL=http://localhost:5000/api/ai
      ```
-   - In an Android debug build, the same value can be set through Chrome remote debugging (`chrome://inspect`) if WebView debugging is enabled.
-   - Keys stay in WebView storage on that device.
-3. **Backend proxy (recommended before public distribution)**
-   - Put the API key on a server you control, authenticate users there, and call that server from the app.
-   - This is the only option that keeps the key out of the APK. A proxy is not included in this repository; it requires a code change.
+   - For an Android emulator, use `http://10.0.2.2:5000/api/ai`. For a physical device, use your computer's LAN IP, or deploy the proxy over HTTPS and use that URL.
+   - For GitHub Actions APK builds, set the repository secret `AI_API_URL` to the deployed proxy URL.
 
-**Security rule:** never commit real keys to Git, issues, screenshots or logs. If a key was ever exposed, revoke it in Google Cloud and create a new one.
+**Security rule:** never commit real keys to Git, issues, screenshots or logs. Revoke any key that was previously exposed in Git history.
 
-Enable the Gemini API in Google Cloud and configure quota or billing for the key you use.
+Enable the Gemini API in Google Cloud and configure quota or billing for the server keys.
 
 ---
 
@@ -136,7 +145,7 @@ The app never scans SMS in the background or on a timer. A scan only starts when
 - Generates a spending diagnosis from on-device summaries, category baselines and micro-leakage data.
 - Chat answers use the user's actual totals and local tool calls.
 - Results are cached in Dexie for 24 hours.
-- An internet connection and a Gemini key are required.
+- An internet connection and a running AI proxy are required. The app never asks for a Gemini key.
 
 ### Categories and Savings
 
@@ -162,11 +171,15 @@ React UI (pages + components)
 client/src/api/axios.js  ← local API adapter (pseudo-REST routes)
         │
         ├── localExpenseService.js  → Dexie / IndexedDB
-        ├── localGeminiService.js   → Google Gemini HTTPS
+        ├── localGeminiService.js   → AI prompt/tool orchestration
+        │        │
+        │        ▼
+        │   server/ (AI proxy)  → Google Gemini HTTPS
+        │   server-only GEMINI_API_KEY_1..5
         └── smsService.js           → Capacitor SmsReader plugin (Android)
 ```
 
-There is intentionally no HTTP backend in this repository. The file `client/src/api/axios.js` looks like an Axios client to the UI, but it routes calls to local services. Preserve that adapter and its pseudo-routes; do not replace it with a real `axios` instance pointing at a server.
+There is no financial-data backend: expenses, budgets and transactions stay in Dexie. The only server is the AI proxy, which receives AI prompts/image/SMS payloads and holds the Gemini keys. The file `client/src/api/axios.js` looks like an Axios client to the UI, but it routes financial calls to local services. Preserve that adapter and its pseudo-routes; do not replace it with a real `axios` instance pointing at a server.
 
 ### Important service responsibilities
 
@@ -175,10 +188,13 @@ There is intentionally no HTTP backend in this repository. The file `client/src/
 | `client/src/api/axios.js` | Maps pseudo-REST routes such as `/expenses`, `/expenses/batch`, `/expenses/sms-import`, `/ai/scan-bill` to local services. |
 | `client/src/services/localDatabase.js` | Opens Dexie, runs schema migrations and seeds the first launch. |
 | `client/src/services/localExpenseService.js` | CRUD, atomic batch/SMS import, budget breakdown, summaries and analytics. |
-| `client/src/services/localGeminiService.js` | Gemini key resolution/rotation, receipt OCR, SMS parsing and AI chat. |
+| `client/src/services/localGeminiService.js` | Builds local analysis/chat/OCR/SMS prompts and sends Gemini-shaped payloads to the AI proxy. It does not hold keys. |
 | `client/src/services/financeParsers.js` | Pure validation, SMS filters, receipt normalisation, fingerprints and budget-status rules. No browser or Dexie dependency, so it is unit-testable. |
 | `client/src/services/smsService.js` | Reads native SMS, filters locally, removes processed IDs and calls the parser. |
 | `client/src/utils/receiptFingerprint.js` | Deterministic per-device receipt fingerprint. |
+| `server/server.js` | Express AI proxy with CORS, request-size limits and in-memory rate limiting. |
+| `server/services/aiService.js` | Server-only Gemini key loading, automatic rotation, retries, timeouts and sanitized errors. |
+| `server/routes/aiRoutes.js` | `POST /api/ai/generate`, the single AI gateway used by all app AI features. |
 | `client/android/.../SmsReaderPlugin.java` | Native Android SMS reader with permission handling and local exclusions. |
 
 ### Dexie schema version 2
@@ -214,6 +230,13 @@ POST /ai/chat
 POST /ai/scan-bill
 ```
 
+The `/ai/*` pseudo-routes are handled locally for prompt/tool orchestration. The only network endpoint is the proxy:
+
+```text
+POST /api/ai/generate   # Gemini-shaped payload; server adds a rotated key
+GET  /api/health        # key configuration status
+```
+
 ---
 
 ## Project structure
@@ -230,13 +253,21 @@ FinanceAI-App/
 │   │   ├── context/AuthContext.jsx   # Local authentication state
 │   │   ├── hooks/                    # Shared hooks such as useCategories
 │   │   ├── pages/                    # Dashboard, Expenses, Budget, AI, Categories, Savings, Guide, auth pages
-│   │   ├── services/                 # Dexie, local expense, Gemini, SMS, parsers, camera, seed data
+│   │   ├── services/                 # Dexie, local expense, AI orchestration, SMS, parsers, camera, seed data
 │   │   └── utils/                    # Formatting and fingerprint helpers
 │   ├── tests/financeParsers.test.js  # Node built-in test runner tests
 │   ├── capacitor.config.json
 │   ├── eslint.config.js
 │   ├── package.json
 │   └── vite.config.js
+├── server/
+│   ├── routes/aiRoutes.js            # POST /api/ai/generate
+│   ├── services/aiService.js         # Server-only Gemini keys and rotation
+│   ├── middleware/                   # Rate limiting and error handling
+│   ├── tests/                        # Proxy routing, rotation and error tests
+│   ├── .env.example                  # Server-only key template
+│   ├── package.json
+│   └── server.js
 ├── .github/workflows/build-apk.yml   # Builds a debug APK and updates the GitHub Release
 └── README.md
 ```
@@ -247,20 +278,32 @@ FinanceAI-App/
 - Capacitor 8
 - Dexie 4 / IndexedDB
 - Chart.js and react-chartjs-2
+- Node.js/Express AI proxy with server-only Gemini keys
 - Google Gemini REST API (`gemini-2.5-flash`)
 - Native Android Java plugin for SMS
 - Node built-in test runner, ESLint
 
 ### Requirements
 
-- Node.js 22
+- Node.js 22 for the client and AI proxy
 - Java JDK 21
 - Android SDK for Android builds
-- A Gemini API key for AI features
+- Server-side Gemini keys for AI features; users never supply keys
 
 ---
 
 ## Development
+
+### Run the AI proxy
+
+```bash
+cd server
+npm install
+npm test
+npm run dev
+```
+
+Create `server/.env` from `server/.env.example` and add `GEMINI_API_KEY_1..5`. The proxy exposes `POST /api/ai/generate` and `GET /api/health`. It does not connect to a database and does not store financial data.
 
 ### Install and run the web app
 
@@ -269,6 +312,8 @@ cd client
 npm install
 npm run dev
 ```
+
+Set `VITE_AI_API_URL` in `client/.env` when the proxy is not at `http://localhost:5000/api/ai`.
 
 ### Lint, test and build
 
@@ -279,7 +324,9 @@ npm test
 npm run build
 ```
 
-`npm test` runs the Node tests in `client/tests/`. The web build is written to `client/dist/`.
+`npm test` runs the Node tests in `client/tests/`; `npm test` in `server/` runs the proxy tests. The web build is written to `client/dist/`.
+
+The APK must be built with `VITE_AI_API_URL` pointing at a reachable HTTPS proxy; otherwise AI features cannot reach the server.
 
 ### Build the Android APK
 
@@ -341,20 +388,24 @@ Run:
 ```bash
 cd client
 npm test
+
+cd ../server
+npm test
 ```
 
-Expected current result: **15 tests passing**.
+Expected current result: **15 client tests and 14 proxy tests passing**.
 
 ---
 
 ## Security and privacy notes
 
-### Gemini keys
+### Gemini keys and the AI proxy
 
-- Never commit real API keys.
-- `VITE_*` keys are visible in the built APK. This is acceptable only for a personal development build.
-- Storing a key in device `localStorage` keeps it out of Git, but it is still readable by anyone with access to the device or a debuggable WebView.
-- A backend proxy is the only way to keep the key private in a distributed app.
+- Gemini keys live only in `server/.env` or the deployment's secret store.
+- Never put keys in `client/`, `VITE_*` variables, localStorage, the APK or Git.
+- `VITE_AI_API_URL` is not a secret; it only tells the app where the proxy lives.
+- The proxy rotates across up to five keys on rate limits, server errors and rejected keys, and never returns keys to the client.
+- The proxy rate-limits requests by IP, but it does not have user accounts because this app's accounts are local-only. Protect a public deployment with your platform's access controls or an authenticated gateway.
 - Revoke any key that was ever committed, logged or shared.
 
 ### SMS data
@@ -385,7 +436,8 @@ Read this section before changing the project.
 
 ### Keep the architecture
 
-- **Do not add a backend.** Do not introduce Node/Express, MongoDB, MySQL, Postgres, Supabase or any required server.
+- **Do not add a financial-data backend.** Do not move expenses, budgets or transactions to Node/Express, MongoDB, MySQL, Postgres, Supabase or any server. The included `server/` is an AI-only proxy.
+- **Keep Gemini keys server-only.** The client must call `server/` and must never read, store or bundle keys.
 - **Do not replace Dexie.** Keep IndexedDB/Dexie as the source of truth.
 - **Do not replace the local API adapter.** `client/src/api/axios.js` must continue to route pseudo-routes such as `/expenses/batch` and `/ai/scan-bill` to local services.
 - **Keep the app usable offline** for everything except AI calls.
@@ -404,10 +456,12 @@ Read this section before changing the project.
 
 ### Security rules
 
-- Never hardcode or commit API keys.
+- Never hardcode or commit API keys. Keep them in `server/.env` or deployment secrets.
+- Do not add Gemini key reads to the client, localStorage, Vite variables or APK assets.
 - Do not log SMS bodies, account numbers, UPI IDs, balances or OTPs.
-- Keep local filtering and redaction in place before sending SMS text to Gemini.
-- Do not claim that an APK-bundled key is secure.
+- Keep local filtering and redaction in place before sending SMS text to the AI proxy.
+- Do not claim that an APK-bundled key is secure; the proxy exists so there is no bundled key.
+- Do not log Gemini keys or return upstream response bodies that might contain request data.
 
 ### Before committing
 
@@ -442,8 +496,10 @@ If Android build output or generated web assets are being linted accidentally, u
 
 | Problem | Cause and fix |
 | --- | --- |
-| “Gemini API key is not configured” | Add a key through `VITE_GEMINI_API_KEYS` before building, or set `financeai_gemini_api_keys` in localStorage. Rebuild/reload after changing a build-time variable. |
-| Receipt scan fails | Check the Gemini key, network connection and image size (under 8 MB). You can still enter the receipt manually. |
+| “The AI backend is unreachable” | Start the proxy with `npm run dev` in `server/`, check `http://localhost:5000/api/health`, and confirm `VITE_AI_API_URL` points at it. For Android, do not use `localhost` unless the proxy runs on the device. |
+| “AI service is not configured on the server” | Add `GEMINI_API_KEY_1..5` to `server/.env` and restart the proxy. |
+| “AI service is temporarily unavailable” | All keys were rate-limited or rejected. Check server logs, Google Cloud quota and key validity. |
+| Receipt scan fails | Check the proxy health, network connection and image size (under 8 MB). You can still enter the receipt manually. |
 | SMS sync button fails on the web | SMS import is Android-only. Use the APK. |
 | SMS permission denied | Re-enable SMS permission in Android app settings, then tap Sync Bank SMS again. |
 | No SMS transactions found | The app may have filtered them as OTP, credit, failed, promotional or already processed, or the bank format may be unsupported. |
@@ -456,6 +512,7 @@ If Android build output or generated web assets are being linted accidentally, u
 
 ## Glossary
 
+- **AI proxy:** The small `server/` app that holds Gemini keys, rotates them and forwards AI requests. It stores no financial data.
 - **APK:** Android application package, the installable app file.
 - **Capacitor:** Tool that wraps the web app in a native Android shell and exposes native plugins.
 - **Dexie / IndexedDB:** Browser/WebView database used as the on-device source of truth.

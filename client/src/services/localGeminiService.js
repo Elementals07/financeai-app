@@ -9,64 +9,14 @@ import {
     redactSmsBody
 } from './financeParsers';
 
-const USER_KEY_STORAGE = 'financeai_gemini_api_keys';
+const DEFAULT_AI_API_URL = 'http://localhost:5000/api/ai';
+const AI_REQUEST_TIMEOUT_MS = 120000;
 
-let activeKeyIndex = 0;
-
-function splitKeys(value) {
-    if (Array.isArray(value)) {
-        return value.map(key => String(key).trim()).filter(Boolean);
-    }
-    if (typeof value !== 'string') return [];
-    return value.split(',').map(key => key.trim()).filter(Boolean);
-}
-
-/**
- * Compile-time keys (e.g. VITE_GEMINI_API_KEYS in a local .env file). These are
- * still extractable from a built APK, so they are intended for development only.
- */
-function readEnvKeys() {
-    try {
-        if (typeof import.meta !== 'undefined' && import.meta.env) {
-            return [
-                ...splitKeys(import.meta.env.VITE_GEMINI_API_KEYS),
-                ...splitKeys(import.meta.env.VITE_GEMINI_API_KEY)
-            ];
-        }
-    } catch {
-        return [];
-    }
-    return [];
-}
-
-/**
- * User-provided keys stored on-device. Stored keys take precedence so a user
- * can rotate credentials without rebuilding the application.
- */
-function readStoredKeys() {
-    try {
-        if (typeof localStorage === 'undefined') return [];
-        const raw = localStorage.getItem(USER_KEY_STORAGE);
-        return raw ? splitKeys(JSON.parse(raw)) : [];
-    } catch {
-        return [];
-    }
-}
-
-function getGeminiKeys() {
-    const keys = [...readStoredKeys(), ...readEnvKeys()];
-    return [...new Set(keys)];
-}
-
-function getActiveKey(keys) {
-    return keys[activeKeyIndex % keys.length];
-}
-
-function rotateKey(keyCount) {
-    if (keyCount <= 0) return 0;
-    activeKeyIndex = (activeKeyIndex + 1) % keyCount;
-    console.log(`[GEMINI ROTATION] Switched to key #${activeKeyIndex + 1}`);
-    return activeKeyIndex;
+function getAiApiUrl() {
+    const configured = typeof import.meta !== 'undefined' && import.meta.env
+        ? String(import.meta.env.VITE_AI_API_URL || '').trim()
+        : '';
+    return (configured || DEFAULT_AI_API_URL).replace(/\/+$/, '');
 }
 
 function parseJsonSafely(text, fallback) {
@@ -206,53 +156,47 @@ async function executeLocalTool(toolName, args) {
 }
 
 /**
- * Direct HTTP caller for Gemini with multi-key rotation and retries
+ * Sends a Gemini-shaped payload to the FinanceAI AI proxy. Gemini keys and
+ * key rotation stay on the server; the app never sees or stores them.
  */
-async function callGeminiDirect(payload, maxRetries = 4) {
-    const keys = getGeminiKeys();
+async function callGeminiProxy(payload) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), AI_REQUEST_TIMEOUT_MS);
 
-    if (keys.length === 0) {
-        throw new Error(
-            'Gemini API key is not configured. Add a key to the financeai_gemini_api_keys local setting or set VITE_GEMINI_API_KEYS before building.'
-        );
-    }
-
-    let lastError = null;
-
-    for (let attempt = 0; attempt <= maxRetries; attempt++) {
-        const key = getActiveKey(keys);
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${key}`;
+    try {
+        let res;
 
         try {
-            const res = await fetch(url, {
+            res = await fetch(`${getAiApiUrl()}/generate`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
+                body: JSON.stringify(payload),
+                signal: controller.signal
             });
-
-            if (res.status === 429 || res.status === 500 || res.status === 503) {
-                console.warn(`[GEMINI API] Key #${(activeKeyIndex % keys.length) + 1} returned status ${res.status}. Rotating...`);
-                rotateKey(keys.length);
-                continue;
+        } catch (error) {
+            if (error.name === 'AbortError') {
+                throw new Error('The AI request timed out. Please try again.');
             }
-
-            if (!res.ok) {
-                const errText = await res.text();
-                throw new Error(`Gemini HTTP ${res.status}: ${errText}`);
-            }
-
-            const data = await res.json();
-            return data;
-        } catch (err) {
-            lastError = err;
-            console.error(`[GEMINI API] Error with key #${(activeKeyIndex % keys.length) + 1}:`, err.message);
-            rotateKey(keys.length);
-            const waitMs = (attempt + 1) * 1000;
-            await new Promise(r => setTimeout(r, waitMs));
+            throw new Error(
+                'The AI backend is unreachable. Start the FinanceAI AI server or set VITE_AI_API_URL.'
+            );
         }
-    }
 
-    throw new Error(`Gemini request failed after ${maxRetries + 1} attempts: ${lastError?.message || 'Network error'}`);
+        if (!res.ok) {
+            let message = 'The AI service is temporarily unavailable. Please try again in a moment.';
+            try {
+                const data = await res.json();
+                if (data?.message) message = data.message;
+            } catch {
+                // Keep the generic message when the proxy does not return JSON.
+            }
+            throw new Error(message);
+        }
+
+        return await res.json();
+    } finally {
+        clearTimeout(timeout);
+    }
 }
 
 export const localGeminiService = {
@@ -364,7 +308,7 @@ export const localGeminiService = {
             }
         };
 
-        const result = await callGeminiDirect(payload);
+        const result = await callGeminiProxy(payload);
         const analysisText = result?.candidates?.[0]?.content?.parts?.[0]?.text || 'No response generated';
 
         // Cache for 24 hours
@@ -422,7 +366,7 @@ export const localGeminiService = {
 
         // Multi-turn tool execution loop (max 3 turns)
         for (let turn = 0; turn < 3; turn++) {
-            const response = await callGeminiDirect(payload);
+            const response = await callGeminiProxy(payload);
             const candidate = response?.candidates?.[0];
             const content = candidate?.content;
 
@@ -536,7 +480,7 @@ CRITICAL: Return ONLY raw JSON without markdown code fences or backticks.`;
             }
         };
 
-        const result = await callGeminiDirect(payload);
+        const result = await callGeminiProxy(payload);
         const text = result?.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
         const parsed = parseJsonSafely(text, null);
         const normalized = normalizeReceiptResult(parsed, categoryNames);
@@ -614,7 +558,7 @@ CRITICAL: Return ONLY a raw JSON array without markdown code blocks:
                 approxDate: dateToLocalYmd(message.date)
             }));
 
-            const res = await callGeminiDirect({
+            const res = await callGeminiProxy({
                 contents: [
                     {
                         role: 'user',
