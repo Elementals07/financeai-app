@@ -11,17 +11,13 @@ This README is written for two audiences:
 
 ---
 
-## What is new in v1.2.0
+## FinanceAI Android v1.3.0
 
-This release adds the following changes:
+This is a production-signed release of the existing Android app. It updates Android's version code to 5; no application functionality or user data formats were changed for this release.
 
-- **On-device Gemini key settings:** add, validate, mask, rotate, or remove up to five user-provided Gemini API keys from the sidebar.
-- **Direct Gemini requests:** AI requests use the user's configured keys directly with Google Gemini instead of the server proxy.
-- **Scrollable AI panels:** advisor analysis and chat keep their headers visible while their content scrolls.
-- **Existing finance features:** local expense and budget storage, receipt scanning and safeguards, category-aware budgets, SMS import, and responsive dashboard improvements from v1.1.0 remain included.
-- **Tests:** 22 client tests and 14 optional proxy server tests cover the current code.
+The app continues to provide local-first expense, budget, category, receipt, and user-initiated SMS import features. Optional AI features use user-configured Gemini API keys; selected financial context, receipt images, and SMS text may be sent directly to Google Gemini when those features are used.
 
-Latest release: `v1.2.0`.
+**Upgrade compatibility:** The signing certificate used by previously distributed v1.2.2 APKs has not been verified against this release. Android requires matching signing certificates for in-place updates. If they differ, Android may reject the update. Back up local data before attempting any uninstall or reinstall.
 
 ---
 
@@ -30,7 +26,7 @@ Latest release: `v1.2.0`.
 ### Option 1: Install the APK
 
 1. Download `FinanceAI.apk` from the Assets section of the [latest GitHub Release](https://github.com/Elementals07/financeai-app/releases/latest).
-2. On the Android device, allow installation from the browser or file manager you used. This is a debug-signed APK, not a Play Store release.
+2. On the Android device, allow installation from the browser or file manager you used. This is a production-signed sideload APK, not a Play Store release.
 3. Open **FinanceAI**.
 4. Create a local account or sign in. Accounts are stored only on the device; there is no cloud account and no password server.
 5. Grant the camera permission when you want to scan a receipt.
@@ -222,7 +218,7 @@ The optional `server/` proxy has its own `/api/ai/generate` and `/api/health` en
 ```text
 FinanceAI-App/
 ├── apk/
-│   └── FinanceAI.apk                 # Current debug-signed APK
+│   └── FinanceAI.apk                 # APK copy; its signature is not verified here
 ├── client/
 │   ├── android/                      # Capacitor Android project (Java)
 │   ├── src/
@@ -246,7 +242,7 @@ FinanceAI-App/
 │   ├── .env.example                  # Server-only key template
 │   ├── package.json
 │   └── server.js
-├── .github/workflows/build-apk.yml   # Builds a debug APK and updates the GitHub Release
+├── .github/workflows/build-apk.yml   # Builds, verifies, and releases a signed Android APK
 └── README.md
 ```
 
@@ -308,38 +304,49 @@ AI features in the APK require a user-provided Gemini API key and an internet co
 
 ### Build the Android APK
 
+Release signing requires a dedicated keystore and these values supplied through environment variables or Gradle properties. Keep all values and keystore files out of source control:
+
+- `FINANCEAI_RELEASE_STORE_FILE`
+- `FINANCEAI_RELEASE_STORE_PASSWORD`
+- `FINANCEAI_RELEASE_KEY_ALIAS`
+- `FINANCEAI_RELEASE_KEY_PASSWORD`
+
 ```bash
 cd client
+npm ci
+npm run lint
+npm test
 npm run build
 npx cap sync android
 cd android
-./gradlew assembleDebug
+./gradlew assembleRelease
 ```
 
 On Windows PowerShell, run the Gradle wrapper as:
 
 ```powershell
 cd client\android
-.\gradlew.bat assembleDebug
+.\gradlew.bat assembleRelease
 ```
 
-The debug APK is written to:
+The release APK is written to:
 
 ```text
-client/android/app/build/outputs/apk/debug/app-debug.apk
+client/android/app/build/outputs/apk/release/app-release.apk
 ```
 
-To publish the current build in this repository:
-
-```powershell
-Copy-Item -LiteralPath "client\android\app\build\outputs\apk\debug\app-debug.apk" -Destination "apk\FinanceAI.apk" -Force
-```
-
-The debug APK is not suitable for production signing. Use a proper release key before distributing outside personal sideloading.
+The release build fails if any signing credential is missing.
 
 ### Continuous integration
 
-`.github/workflows/build-apk.yml` runs on pushes to `main` and on manual dispatch. It installs Node 22 and Java 21, builds the web bundle, syncs Capacitor, builds the debug APK, uploads it as an artifact and updates the GitHub Release. The workflow does not run the linter or tests; run them locally before pushing.
+`.github/workflows/build-apk.yml` runs on version tags and manual dispatch. It runs `npm ci`, lint, tests, and the production web build; syncs Capacitor; restores the dedicated keystore; builds and verifies a signed release APK; and uploads the APK as a workflow artifact. It publishes the APK to the GitHub Release only for the matching `v1.3.0` tag.
+
+Configure these GitHub Actions secrets before running the workflow:
+
+- `FINANCEAI_RELEASE_KEYSTORE_BASE64` — base64-encoded dedicated release keystore.
+- `FINANCEAI_RELEASE_STORE_PASSWORD`
+- `FINANCEAI_RELEASE_KEY_ALIAS`
+- `FINANCEAI_RELEASE_KEY_PASSWORD`
 
 ---
 
@@ -454,7 +461,7 @@ For Android changes, also run:
 ```bash
 npx cap sync android
 cd android
-./gradlew assembleDebug
+./gradlew assembleRelease
 ```
 
 If Android build output or generated web assets are being linted accidentally, update `client/eslint.config.js` ignores instead of adding lint-disable comments across generated files.
@@ -480,7 +487,7 @@ If Android build output or generated web assets are being linted accidentally, u
 | No SMS transactions found | The app may have filtered them as OTP, credit, failed, promotional or already processed, or the bank format may be unsupported. |
 | Duplicate receipt warning | Review the earlier receipt. Confirm again only if this is genuinely a second bill. |
 | Budget shows red or amber unexpectedly | Overall plan comes from profile monthly income, and category limits come from the budget records. Check both in Budget. |
-| Gradle build fails | Confirm Java 21, the Android SDK, and run `npx cap sync android` before `assembleDebug`. |
+| Gradle build fails | Confirm Java 21, the Android SDK, release signing credentials, and run `npx cap sync android` before `assembleRelease`. |
 | Local data disappeared | Clearing app data or uninstalling removes Dexie storage. There is no server backup. |
 
 ---

@@ -1,4 +1,4 @@
-name: Build and Release Standalone Android APK
+name: Build and Release Android APK
 
 on:
   push:
@@ -21,71 +21,113 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: 'npm'
+          cache: npm
           cache-dependency-path: client/package-lock.json
 
       - name: Set up Java JDK 21
         uses: actions/setup-java@v4
         with:
-          distribution: 'temurin'
+          distribution: temurin
           java-version: '21'
-
-      - name: Ensure Android SDK Licenses
-        run: |
-          mkdir -p "$ANDROID_HOME/licenses" || true
-          echo -e "\n8933bad161af4178b1185d1a37fbf41ea5269c55\nd56f5187479451eabf01fb78af6dfcb131a6481e\n24333f8a63b682449dd4133f4f891319e2e0dd9c" > "$ANDROID_HOME/licenses/android-sdk-license"
-          echo -e "\n84831b9409646a918e30573bab4c9c91346d8abd" > "$ANDROID_HOME/licenses/android-sdk-preview-license"
-          yes | sdkmanager --licenses || true
-
-      - name: Build Web Bundle
-        working-directory: ./client
-        run: |
-          npm ci
-          npm run build
-          npx cap sync android
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      - name: Grant Execute Permission for Gradlew
-        working-directory: ./client/android
-        run: chmod +x gradlew
-
-      - name: Build Debug APK
-        working-directory: ./client/android
-        run: ./gradlew assembleDebug --no-daemon --stacktrace
-
-      - name: Prepare APK Release Artifact
+      - name: Install, lint, test, and build web app
+        working-directory: client
         run: |
-          mkdir -p apk
-          cp client/android/app/build/outputs/apk/debug/app-debug.apk apk/FinanceAI.apk
+          npm ci
+          npm run lint
+          npm test
+          npm run build
 
-      - name: Upload APK Artifact
+      - name: Synchronize Capacitor Android assets
+        working-directory: client
+        run: npx cap sync android
+
+      - name: Restore dedicated release keystore
+        env:
+          RELEASE_KEYSTORE_BASE64: ${{ secrets.FINANCEAI_RELEASE_KEYSTORE_BASE64 }}
+        run: |
+          if [ -z "$RELEASE_KEYSTORE_BASE64" ]; then
+            echo "::error::Missing GitHub secret FINANCEAI_RELEASE_KEYSTORE_BASE64."
+            exit 1
+          fi
+          KEYSTORE_PATH="$GITHUB_WORKSPACE/client/android/app/release-keystore.jks"
+          printf '%s' "$RELEASE_KEYSTORE_BASE64" | base64 --decode > "$KEYSTORE_PATH"
+          if [ ! -s "$KEYSTORE_PATH" ]; then
+            echo "::error::The decoded release keystore is empty."
+            exit 1
+          fi
+
+      - name: Build signed release APK
+        working-directory: client/android
+        env:
+          FINANCEAI_RELEASE_STORE_FILE: ${{ github.workspace }}/client/android/app/release-keystore.jks
+          FINANCEAI_RELEASE_STORE_PASSWORD: ${{ secrets.FINANCEAI_RELEASE_STORE_PASSWORD }}
+          FINANCEAI_RELEASE_KEY_ALIAS: ${{ secrets.FINANCEAI_RELEASE_KEY_ALIAS }}
+          FINANCEAI_RELEASE_KEY_PASSWORD: ${{ secrets.FINANCEAI_RELEASE_KEY_PASSWORD }}
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleRelease --no-daemon --stacktrace
+
+      - name: Verify APK signature and version
+        env:
+          EXPECTED_VERSION: '1.3.0'
+          EXPECTED_APPLICATION_ID: com.elementals.financeai
+          EXPECTED_VERSION_CODE: '5'
+        run: |
+          if [ "$GITHUB_REF_TYPE" = "tag" ] && [ "$GITHUB_REF_NAME" != "v$EXPECTED_VERSION" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match app version v$EXPECTED_VERSION."
+            exit 1
+          fi
+
+          APK_PATH="client/android/app/build/outputs/apk/release/app-release.apk"
+          if [ ! -s "$APK_PATH" ]; then
+            echo "::error::Release APK was not created at $APK_PATH."
+            exit 1
+          fi
+
+          APKSIGNER="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)"
+          AAPT="$(find "$ANDROID_HOME/build-tools" -type f -name aapt | sort -V | tail -n 1)"
+          if [ -z "$APKSIGNER" ] || [ -z "$AAPT" ]; then
+            echo "::error::Android SDK apksigner or aapt was not found."
+            exit 1
+          fi
+
+          "$APKSIGNER" verify --verbose "$APK_PATH"
+          "$AAPT" dump badging "$APK_PATH" | grep -Fq "package: name='$EXPECTED_APPLICATION_ID' versionCode='$EXPECTED_VERSION_CODE' versionName='$EXPECTED_VERSION'"
+
+          mkdir -p apk
+          cp "$APK_PATH" apk/FinanceAI.apk
+
+      - name: Upload APK workflow artifact
         uses: actions/upload-artifact@v4
         with:
-          name: FinanceAI-Standalone-APK
+          name: FinanceAI-Android-v1.3.0
           path: apk/FinanceAI.apk
+          if-no-files-found: error
 
-      - name: Create or Update GitHub Release
+      - name: Publish GitHub Release
+        if: github.ref_type == 'tag' && github.ref_name == 'v1.3.0'
         uses: softprops/action-gh-release@v2
-        if: startsWith(github.ref, 'refs/tags/v')
         with:
-          tag_name: ${{ github.ref_name }}
-          name: "FinanceAI Mobile ${{ github.ref_name }}"
+          name: FinanceAI Android v1.3.0
           draft: false
           prerelease: false
-          token: ${{ secrets.GITHUB_TOKEN }}
           body: |
-            ### FinanceAI Mobile App ${{ github.ref_name }}
+            ### FinanceAI Android v1.3.0
 
-            **What's new:**
-            - Add and manage up to five personal Gemini API keys in AI Settings, with key validation, masking, and rotation.
-            - AI requests use the configured keys directly with Google Gemini. Keys stay in this device's browser storage and are not bundled in the APK.
-            - Existing local-first expense, budget, receipt, SMS import, and dashboard features remain available.
+            This is a production-signed release of the existing FinanceAI Android app (version code 5). No application functionality or user data formats were changed for this release.
 
-            **Privacy:** AI requests send the relevant financial context and, for receipt/SMS features, user-selected content directly to Google Gemini. Review Google's terms and privacy policy before adding a key. Keys in browser storage are not encrypted by FinanceAI.
-            
-            **Direct Download:**
-            - Tap `FinanceAI.apk` under **Assets** below to download and install.
-          files: |
-            apk/FinanceAI.apk
+            **Included app capabilities**
+            - Local-first expenses, budgets, categories, receipt scanning, and user-initiated SMS import.
+            - Optional Gemini AI features using keys configured by the user in AI Settings.
+            - Financial data remains stored on the device; selected financial context, receipt images, and SMS text may be sent directly to Google Gemini when the corresponding feature is used.
+
+            **Upgrade compatibility:** The signing certificate used by previously distributed v1.2.2 APKs has not been verified against this release. Android requires the signing certificates to match for an in-place update. If they differ, Android may reject the update; do not uninstall the existing app without first backing up its local data.
+
+            **Privacy:** Gemini keys are stored in browser storage and are not encrypted by FinanceAI. Review Google's terms and privacy policy before using Gemini features.
+
+            **Download:** `FinanceAI.apk` is the signed release APK attached below.
+          files: apk/FinanceAI.apk

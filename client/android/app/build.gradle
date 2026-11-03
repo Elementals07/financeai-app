@@ -1,5 +1,21 @@
 apply plugin: 'com.android.application'
 
+def releaseSetting = { String name ->
+    def value = project.findProperty(name)
+    value != null ? value.toString() : System.getenv(name)
+}
+
+def releaseStoreFile = releaseSetting('FINANCEAI_RELEASE_STORE_FILE')
+def releaseStorePassword = releaseSetting('FINANCEAI_RELEASE_STORE_PASSWORD')
+def releaseKeyAlias = releaseSetting('FINANCEAI_RELEASE_KEY_ALIAS')
+def releaseKeyPassword = releaseSetting('FINANCEAI_RELEASE_KEY_PASSWORD')
+def missingReleaseSigningValues = [
+    FINANCEAI_RELEASE_STORE_FILE: releaseStoreFile,
+    FINANCEAI_RELEASE_STORE_PASSWORD: releaseStorePassword,
+    FINANCEAI_RELEASE_KEY_ALIAS: releaseKeyAlias,
+    FINANCEAI_RELEASE_KEY_PASSWORD: releaseKeyPassword
+].findAll { name, value -> !value }.keySet()
+
 android {
     namespace = "com.elementals.financeai"
     compileSdk = rootProject.ext.compileSdkVersion
@@ -7,7 +23,7 @@ android {
         applicationId "com.elementals.financeai"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 4
+        versionCode 5
         versionName "1.3.0"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
@@ -16,11 +32,32 @@ android {
             ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+    signingConfigs {
+        release {
+            if (releaseStoreFile) storeFile file(releaseStoreFile)
+            if (releaseStorePassword) storePassword releaseStorePassword
+            if (releaseKeyAlias) keyAlias releaseKeyAlias
+            if (releaseKeyPassword) keyPassword releaseKeyPassword
+        }
+    }
     buildTypes {
         release {
             minifyEnabled false
+            signingConfig signingConfigs.release
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }
+    }
+}
+
+gradle.taskGraph.whenReady { taskGraph ->
+    def isReleaseBuild = taskGraph.allTasks.any {
+        it.project == project && it.name.toLowerCase(Locale.ROOT).contains('release')
+    }
+    if (isReleaseBuild && !missingReleaseSigningValues.isEmpty()) {
+        throw new GradleException(
+            "Release signing credentials are missing: ${missingReleaseSigningValues.join(', ')}. " +
+            "Set them as Gradle properties or environment variables."
+        )
     }
 }
 
