@@ -1,9 +1,23 @@
 /**
  * Auth Context
- * Manages authentication state across the app with unified session handling
+ * Manages authentication state across the app with unified session handling.
+ *
+ * The authenticated account is tracked explicitly via `auth_user_id`; there is
+ * no fallback to the first database record (the demo account never silently
+ * becomes the current user).
  */
 import { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import API from '../api/axios';
+import {
+    getStoredToken,
+    getStoredUserId,
+    getStoredUser,
+    setStoredToken,
+    setStoredUser,
+    setStoredUserId,
+    clearSession
+} from '../services/authSession';
+import { SESSION_EXPIRED_MESSAGE } from '../services/localExpenseService';
 
 const AuthContext = createContext(null);
 
@@ -15,20 +29,14 @@ export const useAuth = () => {
 };
 
 export const AuthProvider = ({ children }) => {
-    const [user, setUser] = useState(() => {
-        try {
-            const saved = localStorage.getItem('user');
-            return saved ? JSON.parse(saved) : null;
-        } catch {
-            return null;
-        }
-    });
-    const [token, setToken] = useState(() => localStorage.getItem('token'));
+    const [user, setUser] = useState(() => getStoredUser());
+    const [token, setToken] = useState(() => getStoredToken());
     const [loading, setLoading] = useState(true);
 
     // Synchronize 401 logout events from API interceptor
     useEffect(() => {
         const handleUnauthorized = () => {
+            clearSession();
             setToken(null);
             setUser(null);
         };
@@ -36,28 +44,44 @@ export const AuthProvider = ({ children }) => {
         return () => window.removeEventListener('auth:unauthorized', handleUnauthorized);
     }, []);
 
-    // On mount or token change, verify user session
+    // On mount or token change, verify user session.
+    // Restore only from BOTH token + auth_user_id, and only accept /auth/me
+    // results that match the stored id.
     useEffect(() => {
         let isMounted = true;
         const initAuth = async () => {
-            const currentToken = localStorage.getItem('token');
+            const currentToken = getStoredToken();
+            const currentUserId = getStoredUserId();
+
             if (currentToken) {
                 try {
-                    const res = await API.get('/auth/me');
-                    if (isMounted) {
-                        setUser(res.data.data);
-                        localStorage.setItem('user', JSON.stringify(res.data.data));
+                    if (currentUserId) {
+                        const res = await API.get('/auth/me');
+                        const restoredUser = res?.data?.data;
+                        if (isMounted && restoredUser && Number(restoredUser.id) === Number(currentUserId)) {
+                            setUser(restoredUser);
+                            setStoredUser(restoredUser);
+                        } else if (isMounted) {
+                            clearSession();
+                            setToken(null);
+                            setUser(null);
+                        }
+                    } else if (isMounted) {
+                        // Token without an explicit user id: stale session.
+                        clearSession();
+                        setToken(null);
+                        setUser(null);
                     }
                 } catch {
                     if (isMounted) {
-                        localStorage.removeItem('token');
-                        localStorage.removeItem('user');
+                        clearSession();
                         setToken(null);
                         setUser(null);
                     }
                 }
             } else {
                 if (isMounted) {
+                    clearSession();
                     setUser(null);
                 }
             }
@@ -74,9 +98,27 @@ export const AuthProvider = ({ children }) => {
 
     const login = async (email, password) => {
         const res = await API.post('/auth/login', { email, password });
-        const { token: newToken, user: userData } = res.data.data;
-        localStorage.setItem('token', newToken);
-        localStorage.setItem('user', JSON.stringify(userData));
+        const { token: newToken, user: userData } = res.data.data || {};
+        if (!newToken || !userData) {
+            throw new Error(SESSION_EXPIRED_MESSAGE);
+        }
+        setStoredToken(newToken);
+        setStoredUser(userData);
+        setStoredUserId(userData.id);
+        setToken(newToken);
+        setUser(userData);
+        return userData;
+    };
+
+    const loginDemo = async () => {
+        const res = await API.post('/auth/demo', {});
+        const { token: newToken, user: userData } = res.data.data || {};
+        if (!newToken || !userData) {
+            throw new Error('The demo account is unavailable. Please restart the app and try again.');
+        }
+        setStoredToken(newToken);
+        setStoredUser(userData);
+        setStoredUserId(userData.id);
         setToken(newToken);
         setUser(userData);
         return userData;
@@ -84,17 +126,20 @@ export const AuthProvider = ({ children }) => {
 
     const register = async (name, email, password) => {
         const res = await API.post('/auth/register', { name, email, password });
-        const { token: newToken, user: userData } = res.data.data;
-        localStorage.setItem('token', newToken);
-        localStorage.setItem('user', JSON.stringify(userData));
+        const { token: newToken, user: userData } = res.data.data || {};
+        if (!newToken || !userData) {
+            throw new Error(SESSION_EXPIRED_MESSAGE);
+        }
+        setStoredToken(newToken);
+        setStoredUser(userData);
+        setStoredUserId(userData.id);
         setToken(newToken);
         setUser(userData);
         return userData;
     };
 
     const logout = useCallback(() => {
-        localStorage.removeItem('token');
-        localStorage.removeItem('user');
+        clearSession();
         setToken(null);
         setUser(null);
     }, []);
@@ -103,7 +148,7 @@ export const AuthProvider = ({ children }) => {
         setUser(prev => {
             const next = { ...prev, ...userData };
             try {
-                localStorage.setItem('user', JSON.stringify(next));
+                setStoredUser(next);
             } catch (e) {
                 console.error('Failed to persist user update', e);
             }
@@ -117,6 +162,7 @@ export const AuthProvider = ({ children }) => {
         loading,
         isAuthenticated: !!token && !!user,
         login,
+        loginDemo,
         register,
         logout,
         updateUser

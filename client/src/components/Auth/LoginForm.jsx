@@ -11,9 +11,6 @@ import {
 } from 'react-icons/hi2';
 import toast from 'react-hot-toast';
 
-const DEMO_EMAIL = 'demo@example.com';
-const DEMO_PASS = 'demo@123';
-
 const LoginForm = () => {
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
@@ -21,7 +18,7 @@ const LoginForm = () => {
     const [loading, setLoading] = useState(false);
     const [demoLoading, setDemoLoading] = useState(false);
     const [errorMsg, setErrorMsg] = useState('');
-    const { login } = useAuth();
+    const { login, loginDemo } = useAuth();
     const navigate = useNavigate();
 
     const handleSubmit = async (e) => {
@@ -49,12 +46,13 @@ const LoginForm = () => {
         setErrorMsg('');
         setDemoLoading(true);
         try {
-            await login(DEMO_EMAIL, DEMO_PASS);
+            await loginDemo();
             toast.success('Logged in as demo user');
             navigate('/');
-        } catch {
-            setErrorMsg('Demo account login failed. You can create a new account below.');
-            toast.error('Demo login failed');
+        } catch (err) {
+            const msg = err.response?.data?.message || 'Demo login failed. Please restart the app and try again.';
+            setErrorMsg(msg);
+            toast.error(msg);
         } finally {
             setDemoLoading(false);
         }

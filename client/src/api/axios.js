@@ -30,7 +30,8 @@ const API = {
             }
         }
 
-        // 1. Auth Me
+        // 1. Auth Me — resolves the authenticated profile via the explicit
+        // session user id stored at login/registration time.
         if (cleanUrl === '/auth/me') {
             const user = await localExpenseService.getCurrentUser();
             return { data: { success: true, data: user } };
@@ -98,15 +99,23 @@ const API = {
     async post(url, body = {}) {
         const cleanUrl = url.replace(/^\/api/, '');
 
-        // 1. Auth Login
+        // 1. Auth Login — verifies email + password; never creates accounts.
+        // Errors thrown by the service carry `response.data.message`.
         if (cleanUrl === '/auth/login') {
-            const res = await localExpenseService.login(body.email);
+            const res = await localExpenseService.login(body.email, body.password);
             return { data: { success: true, data: res } };
         }
 
-        // 2. Auth Register
+        // 2. Auth Register — validates fields, rejects duplicates, hashes the
+        // password. Errors thrown by the service carry `response.data.message`.
         if (cleanUrl === '/auth/register') {
-            const res = await localExpenseService.register(body.name, body.email);
+            const res = await localExpenseService.register(body.name, body.email, body.password);
+            return { data: { success: true, data: res } };
+        }
+
+        // 2a. Auth Demo — explicit "Try Demo" login to the seeded demo account
+        if (cleanUrl === '/auth/demo') {
+            const res = await localExpenseService.loginDemo();
             return { data: { success: true, data: res } };
         }
 

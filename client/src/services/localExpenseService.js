@@ -1,5 +1,12 @@
-import { db, initLocalDatabase } from './localDatabase';
-import { buildCategoryBudgetBreakdown, computeBudgetStatus } from './financeParsers';
+import { db, initLocalDatabase, findDemoUser } from './localDatabase.js';
+import { buildCategoryBudgetBreakdown, computeBudgetStatus } from './financeParsers.js';
+import {
+    getStoredUserId,
+    setStoredUserId,
+    setStoredToken,
+    setStoredUser
+} from './authSession.js';
+import { hashPassword, verifyPassword } from './authCrypto.js';
 
 /**
  * Local Expense Service
@@ -7,53 +14,141 @@ import { buildCategoryBudgetBreakdown, computeBudgetStatus } from './financePars
  * Eliminates all need for an external backend or Node.js server.
  */
 
-// Helper to get active user ID (defaults to 1)
+export const SESSION_EXPIRED_MESSAGE = 'Your session has expired. Please sign in again.';
+
+/** Error whose `response.data.message` mirrors an HTTP API error payload. */
+export function authError(message, { simulateUnauthorized = false } = {}) {
+    const err = new Error(message);
+    err.response = {
+        status: simulateUnauthorized ? 401 : 400,
+        data: { success: false, message }
+    };
+    return err;
+}
+
+// Resolves the authenticated user ID from the explicit session — never the
+// first database record.
 async function getUserId() {
-    let user = await db.user_profile.toCollection().first();
-    if (!user) {
-        user = await initLocalDatabase();
+    const sessionId = getStoredUserId();
+    if (!sessionId) {
+        throw authError(SESSION_EXPIRED_MESSAGE, { simulateUnauthorized: true });
     }
-    return user ? user.id : 1;
+    const user = await db.user_profile.get(sessionId);
+    if (!user) {
+        throw authError(SESSION_EXPIRED_MESSAGE, { simulateUnauthorized: true });
+    }
+    return user.id;
 }
 
 export const localExpenseService = {
     // ─── USER & AUTH ──────────────────────────────────────────────────────────
     async getCurrentUser() {
         await initLocalDatabase();
-        return await db.user_profile.toCollection().first();
+        const sessionId = getStoredUserId();
+        if (!sessionId) {
+            throw authError(SESSION_EXPIRED_MESSAGE, { simulateUnauthorized: true });
+        }
+        const user = await db.user_profile.get(sessionId);
+        if (!user) {
+            throw authError(SESSION_EXPIRED_MESSAGE, { simulateUnauthorized: true });
+        }
+        return user;
     },
 
-    async login(email) {
+    async login(email, password) {
         await initLocalDatabase();
-        let user = await db.user_profile.where('email').equalsIgnoreCase(email).first();
-        if (!user) {
-            // In standalone mobile, if not found, create profile seamlessly
-            user = {
-                name: email.split('@')[0] || 'Elementals',
-                email,
-                monthly_income: 65000,
-                created_at: new Date().toISOString()
-            };
-            user.id = await db.user_profile.add(user);
+        const cleanEmail = String(email || '').trim();
+        if (!cleanEmail) {
+            throw authError('Please enter your email address.');
         }
+        if (!password) {
+            throw authError('Please enter your password.');
+        }
+        const user = await db.user_profile
+            .where('email')
+            .equalsIgnoreCase(cleanEmail)
+            .first();
+        if (!user) {
+            throw authError('No account found with that email address. Please check the email or create an account.');
+        }
+        if ((!user.password_hash || !user.password_salt) && !user.is_demo) {
+            throw authError('This account was created by an older app version without a password. Register with the same email to claim it — your existing data is kept.');
+        }
+        const passwordIterations = user.password_iterations || 150000;
+        const ok = await verifyPassword(password, user.password_salt, user.password_hash, passwordIterations);
+        if (!ok) {
+            throw authError('Incorrect password. Please try again.');
+        }
+        localExpenseService.persistSession(user);
         return { token: 'standalone_token_' + user.id, user };
     },
 
-    async register(name, email) {
+    // Writes the complete session: token, cached user object, explicit id.
+    persistSession(user) {
+        setStoredToken('standalone_token_' + user.id);
+        setStoredUser(user);
+        setStoredUserId(user.id);
+    },
+
+    /** Explicit demo-account login used by the "Try Demo" button. */
+    async loginDemo() {
         await initLocalDatabase();
-        let user = await db.user_profile.where('email').equalsIgnoreCase(email).first();
-        if (user) {
-            user.name = name;
-            await db.user_profile.put(user);
-        } else {
-            user = {
-                name,
-                email,
-                monthly_income: 65000,
-                created_at: new Date().toISOString()
-            };
-            user.id = await db.user_profile.add(user);
+        const demo = await findDemoUser();
+        if (!demo) {
+            throw authError('The demo account is unavailable. Please restart the app and try again.');
         }
+        localExpenseService.persistSession(demo);
+        return { token: 'standalone_token_' + demo.id, user: demo };
+    },
+
+    async register(name, email, password) {
+        await initLocalDatabase();
+        const cleanName = String(name || '').trim();
+        const cleanEmail = String(email || '').trim();
+
+        if (!cleanName || cleanName.length < 2) {
+            throw authError('Please enter your full name (at least 2 characters).');
+        }
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
+            throw authError('Please enter a valid email address.');
+        }
+        if (!password || password.length < 6) {
+            throw authError('Password must be at least 6 characters long.');
+        }
+        if (cleanEmail.toLowerCase() === 'user@financeai.com') {
+            throw authError('That email is reserved for the demo account. Please use another address.');
+        }
+
+        const existing = await db.user_profile
+            .where('email')
+            .equalsIgnoreCase(cleanEmail)
+            .first();
+
+        if (existing) {
+            // Legacy (password-less) profiles: claim them, data is preserved.
+            if (existing.password_hash && !existing.is_demo) {
+                throw authError('An account with this email already exists. Please sign in instead.');
+            }
+            if (existing.is_demo) {
+                throw authError('That email is reserved for the demo account. Please use another address.');
+            }
+            const hashed = await hashPassword(password);
+            const claimed = { ...existing, ...hashed, name: cleanName, email: existing.email, claimed_legacy: true };
+            await db.user_profile.put(claimed);
+            localExpenseService.persistSession(claimed);
+            return { token: 'standalone_token_' + claimed.id, user: claimed };
+        }
+
+        const hashed = await hashPassword(password);
+        const user = {
+            name: cleanName,
+            email: cleanEmail,
+            monthly_income: 65000,
+            created_at: new Date().toISOString(),
+            ...hashed
+        };
+        user.id = await db.user_profile.add(user);
+        localExpenseService.persistSession(user);
         return { token: 'standalone_token_' + user.id, user };
     },
 
@@ -834,3 +929,4 @@ export const localExpenseService = {
         return true;
     }
 };
+
