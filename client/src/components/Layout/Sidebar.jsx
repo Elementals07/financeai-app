@@ -12,7 +12,6 @@ import {
     HiOutlineCircleStack,
     HiOutlineTag,
     HiOutlineQuestionMarkCircle,
-    HiOutlineCog6Tooth,
     HiOutlineChevronLeft,
     HiOutlineChevronRight,
     HiOutlineXMark
@@ -171,7 +170,7 @@ const Sidebar = ({ mobileOpen, onCloseMobile }) => {
                             fontFamily: 'inherit'
                         }}
                     >
-                        <span className="nav-icon"><HiOutlineCog6Tooth aria-hidden="true" /></span>
+                        <span className="nav-icon"><HiOutlineSparkles aria-hidden="true" /></span>
                         {!collapsed && (
                             <>
                                 <span className="nav-item-label">AI Settings</span>

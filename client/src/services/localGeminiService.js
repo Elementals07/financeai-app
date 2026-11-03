@@ -212,8 +212,39 @@ function backoffDelayMs(attempt) {
  * error-handling matrix can be exercised without network access.
  */
 export async function callGeminiDirect(payload, options = {}) {
+    // When running in the browser, all AI processing is handled by the server
+    if (!options.fetchImpl && typeof window !== 'undefined') {
+        const storedKeys = loadGeminiKeys();
+        const activeKey = storedKeys.length > 0 ? (storedKeys[activeKeyIndex % storedKeys.length] || storedKeys[0]) : '';
+
+        const headers = { 'Content-Type': 'application/json' };
+        if (activeKey) {
+            headers['x-gemini-key'] = activeKey;
+        }
+
+        const response = await fetch('/api/ai/generate', {
+            method: 'POST',
+            headers,
+            body: JSON.stringify(payload)
+        });
+
+        if (!response.ok) {
+            const errData = await response.json().catch(() => ({}));
+            const msg = errData?.error?.message || errData?.message || `AI request failed (HTTP ${response.status})`;
+            if (response.status === 429 && storedKeys.length > 1) {
+                activeKeyIndex = (activeKeyIndex + 1) % storedKeys.length;
+            }
+            throw new Error(msg);
+        }
+
+        return await response.json();
+    }
+
     const maxRetries = options.maxRetries ?? 4;
-    const keys = options.keys ?? loadGeminiKeys();
+    const envKey = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_GEMINI_API_KEY) || '';
+    const storedKeys = loadGeminiKeys();
+    const effectiveKeys = envKey ? [envKey, ...storedKeys.filter(k => k !== envKey)] : storedKeys;
+    const keys = options.keys ?? effectiveKeys;
     const fetchFn = options.fetchImpl ?? fetch.bind(globalThis);
     const delayFn = options.delayFn ?? ((ms) => new Promise(resolve => setTimeout(resolve, ms)));
 

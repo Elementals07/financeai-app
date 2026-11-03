@@ -1,0 +1,11 @@
+{
+  "name": "FinanceAI — Everyday Ledger",
+  "description": "Simple, clear, and accessible local-first personal finance and budgeting with AI spending insights, receipt scanner, and analytics.",
+  "permissions": [],
+  "capabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

@@ -5,6 +5,7 @@ import {
     HiOutlineEyeSlash,
     HiOutlineKey,
     HiOutlineShieldCheck,
+    HiOutlineSparkles,
     HiOutlineXMark
 } from 'react-icons/hi2';
 import {
@@ -62,7 +63,7 @@ const GeminiSettingsModal = ({ onClose, onSaved }) => {
         });
     };
 
-    const handleSave = () => {
+    const handleSave = async () => {
         const trimmedInputs = inputs.map(value => value.trim());
         const validationError = trimmedInputs
             .map(getGeminiKeyValidationError)
@@ -84,8 +85,17 @@ const GeminiSettingsModal = ({ onClose, onSaved }) => {
         setSaving(true);
         try {
             const saved = saveGeminiKeys(keys);
+            // Sync with server
+            if (saved.length > 0) {
+                await fetch('/api/ai/configure-key', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ key: saved[0], keys: saved })
+                }).catch(() => {});
+            }
+
             onSaved?.(saved);
-            toast.success(saved.length ? `Saved ${saved.length} Gemini key${saved.length === 1 ? '' : 's'}.` : 'Gemini keys cleared.');
+            toast.success(saved.length ? `Saved ${saved.length} Gemini key${saved.length === 1 ? '' : 's'}. Server AI is ready!` : 'Gemini keys cleared.');
             onClose();
         } catch (error) {
             toast.error(error.message || 'Could not save Gemini keys.');
@@ -94,13 +104,18 @@ const GeminiSettingsModal = ({ onClose, onSaved }) => {
         }
     };
 
-    const handleClear = () => {
+    const handleClear = async () => {
         setSaving(true);
         try {
             clearGeminiKeys();
             setInputs(emptyInputs());
+            await fetch('/api/ai/configure-key', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ key: '', keys: [] })
+            }).catch(() => {});
             onSaved?.([]);
-            toast.success('Gemini keys removed from this device.');
+            toast.success('Gemini keys removed.');
             onClose();
         } catch (error) {
             toast.error(error.message || 'Could not remove Gemini keys.');
@@ -117,12 +132,15 @@ const GeminiSettingsModal = ({ onClose, onSaved }) => {
             aria-modal="true"
             aria-labelledby="gemini-settings-title"
         >
-            <div className="modal" onClick={(event) => event.stopPropagation()}>
+            <div className="modal" onClick={(event) => event.stopPropagation()} style={{ maxWidth: '520px' }}>
                 <div className="modal-header">
                     <div>
-                        <h2 id="gemini-settings-title" className="modal-title">AI Settings</h2>
+                        <h2 id="gemini-settings-title" className="modal-title" style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                            <HiOutlineSparkles style={{ color: 'var(--color-primary)' }} />
+                            AI Settings & Gemini API Keys
+                        </h2>
                         <p style={{ margin: '0.25rem 0 0', color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
-                            Add your own Gemini API keys for AI features.
+                            Add your Gemini API key for server-side financial advice, receipt scanning, and live voice.
                         </p>
                     </div>
                     <button
@@ -156,17 +174,15 @@ const GeminiSettingsModal = ({ onClose, onSaved }) => {
                                 marginTop: '0.1rem'
                             }}
                         />
-                        <p style={{ margin: 0, fontSize: '0.85rem', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
-                            Keys are stored in this browser's local storage, which FinanceAI does not encrypt. AI requests
-                            send your financial context directly to Google Gemini. Do not save keys on a shared device.
-                            Add up to {MAX_GEMINI_KEYS} keys for automatic rotation.
+                        <p style={{ margin: 0, fontSize: '0.83rem', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+                            All AI calls execute server-side through Google Gemini 3.8 Flash and Live API. Add up to {MAX_GEMINI_KEYS} keys for automatic rotation and high availability.
                         </p>
                     </div>
 
                     <div className="form-group">
                         <label className="form-label" htmlFor="gemini-key-1">
                             <HiOutlineKey aria-hidden="true" style={{ marginRight: '0.35rem', verticalAlign: '-0.15rem' }} />
-                            Gemini API keys
+                            Gemini API Keys
                         </label>
                         {inputs.map((value, index) => (
                             <input
@@ -177,7 +193,7 @@ const GeminiSettingsModal = ({ onClose, onSaved }) => {
                                 value={value}
                                 onChange={(event) => updateInput(index, event.target.value)}
                                 onPaste={(event) => handlePaste(index, event)}
-                                placeholder={`Gemini key ${index + 1}`}
+                                placeholder={index === 0 ? 'Primary Gemini API Key (e.g. AIza...)' : `Fallback Key ${index + 1} (optional)`}
                                 autoComplete="off"
                                 autoCapitalize="none"
                                 autoCorrect="off"
@@ -186,7 +202,7 @@ const GeminiSettingsModal = ({ onClose, onSaved }) => {
                             />
                         ))}
                         <p style={{ margin: '0.25rem 0 0', fontSize: '0.78rem', color: 'var(--text-muted)' }}>
-                            Paste raw Gemini API keys only, not full URLs. You can paste multiple keys at once.
+                            Paste raw Gemini API keys only. You can paste multiple keys separated by newlines.
                         </p>
                     </div>
 

@@ -7,10 +7,25 @@ import {
     HiOutlineCircleStack, 
     HiOutlineSparkles,
     HiOutlineChevronDown,
-    HiOutlineCheck
+    HiOutlineCheck,
+    HiOutlineDevicePhoneMobile,
+    HiOutlineArrowDownTray
 } from 'react-icons/hi2';
 
 const GUIDE_SECTIONS = [
+    {
+        id: 'mobile-app',
+        icon: <HiOutlineDevicePhoneMobile aria-hidden="true" />,
+        title: '📱 Use FinanceAI Directly on Your Mobile Phone',
+        summary: 'Run FinanceAI directly on your phone as a native Android APK or Home Screen Web App.',
+        steps: [
+            'Method 1 (Android APK with Bank SMS Sync): Download FinanceAI.apk below or from GitHub Releases. Open it in your phone’s Files/Downloads app and tap "Install" (enable "Install unknown apps" if prompted).',
+            'Method 2 (Android Chrome): Open this app URL in Google Chrome on your phone, tap the three-dots menu (⋮), and tap "Add to Home screen" or "Install App".',
+            'Method 3 (iPhone Safari): Open this app URL in Safari, tap the Share icon (square with arrow), and tap "Add to Home Screen".',
+            'Once installed, launch FinanceAI directly from your home screen like any native app. All data is saved on your device in Dexie/IndexedDB.'
+        ],
+        tip: 'The native Android APK allows direct Bank & UPI SMS inbox sync, while the Home Screen Web App works instantly on both Android and iPhone without sideloading.'
+    },
     {
         id: 'add-expense',
         icon: <HiOutlineCreditCard aria-hidden="true" />,
@@ -95,7 +110,7 @@ const GUIDE_SECTIONS = [
 ];
 
 const GuidePage = () => {
-    const [openSection, setOpenSection] = useState('add-expense');
+    const [openSection, setOpenSection] = useState('mobile-app');
 
     const toggleSection = (id) => {
         setOpenSection(prev => prev === id ? null : id);
@@ -106,12 +121,41 @@ const GuidePage = () => {
             {/* Page Header */}
             <div className="page-header">
                 <div className="page-tag">
-                    User Guide
+                    User Guide & Mobile Setup
                 </div>
-                <h1 className="page-title">How to Use FinanceAI</h1>
+                <h1 className="page-title">How to Use & Install FinanceAI</h1>
                 <p className="page-subtitle">
-                    Simple, practical step-by-step instructions for everyday tasks.
+                    Run natively on your mobile phone or follow step-by-step instructions for everyday tasks.
                 </p>
+            </div>
+
+            {/* Quick Mobile Action Banner */}
+            <div className="card mb-6" style={{ background: 'linear-gradient(135deg, rgba(16, 185, 129, 0.08) 0%, rgba(59, 130, 246, 0.08) 100%)', border: '1px solid rgba(16, 185, 129, 0.3)' }}>
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                    <div className="flex items-start gap-3">
+                        <div className="w-10 h-10 rounded-lg bg-emerald-600 text-white flex items-center justify-center shrink-0 text-xl shadow-sm">
+                            <HiOutlineDevicePhoneMobile aria-hidden="true" />
+                        </div>
+                        <div>
+                            <h2 className="text-base font-bold text-gray-900 dark:text-white">
+                                Want to use FinanceAI directly on your phone?
+                            </h2>
+                            <p className="text-sm text-gray-600 dark:text-gray-300 mt-0.5">
+                                Download the production Android APK or install as a Web App directly on your mobile home screen.
+                            </p>
+                        </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                        <a 
+                            href="/api/download/apk"
+                            download="FinanceAI.apk"
+                            className="btn btn-primary inline-flex items-center gap-1.5 text-sm py-2 px-3.5 shadow-sm"
+                        >
+                            <HiOutlineArrowDownTray className="text-lg" aria-hidden="true" />
+                            <span>Download APK (Android)</span>
+                        </a>
+                    </div>
+                </div>
             </div>
 
             {/* Step-by-Step Accordion Sections */}

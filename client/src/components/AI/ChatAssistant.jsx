@@ -1,8 +1,15 @@
 import { useState, useRef, useEffect } from 'react';
 import API from '../../api/axios';
-import { HiOutlinePaperAirplane, HiOutlineSparkles } from 'react-icons/hi2';
+import {
+    HiOutlinePaperAirplane,
+    HiOutlineSparkles,
+    HiOutlineMicrophone,
+    HiOutlineStop
+} from 'react-icons/hi2';
 import toast from 'react-hot-toast';
 import { AdvisorMarkdown } from '../../utils/advisorFormatter';
+import { LiveAudioSession } from '../../services/liveAudioService';
+import { loadGeminiKeys } from '../../services/geminiKeys';
 
 const SUGGESTED_QUESTIONS = [
     "Where did my money go?",
@@ -16,18 +23,77 @@ const ChatAssistant = () => {
     const [messages, setMessages] = useState([
         {
             role: 'assistant',
-            content: "Hello! I am your AI Financial Advisor. I look at your recorded expenses and budget plan to answer questions about where your money is going and how you can save more. Choose a suggested question below or type your own."
+            content: "Hello! I am your AI Financial Advisor. I look at your recorded expenses and budget plan to answer questions about where your money is going and how you can save more. Choose a suggested question below, type your own, or tap the microphone to talk with the real-time Live Voice Advisor."
         }
     ]);
     const [input, setInput] = useState('');
     const [contextTimeframe, setContextTimeframe] = useState('All');
     const [loading, setLoading] = useState(false);
+    const [liveState, setLiveState] = useState('idle'); // idle | connecting | active
+    const [liveTranscript, setLiveTranscript] = useState('');
+
     const messagesEndRef = useRef(null);
+    const liveSessionRef = useRef(null);
 
     // Auto-scroll to bottom of chat
     useEffect(() => {
         messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-    }, [messages, loading]);
+    }, [messages, loading, liveTranscript]);
+
+    // Clean up live session on unmount
+    useEffect(() => {
+        return () => {
+            if (liveSessionRef.current) {
+                liveSessionRef.current.stop();
+            }
+        };
+    }, []);
+
+    const toggleLiveSession = async () => {
+        if (liveState === 'active' || liveState === 'connecting') {
+            if (liveSessionRef.current) {
+                liveSessionRef.current.stop();
+                liveSessionRef.current = null;
+            }
+            setLiveState('idle');
+            setLiveTranscript('');
+            toast.success('Live voice session ended');
+            return;
+        }
+
+        try {
+            setLiveState('connecting');
+            const activeKey = loadGeminiKeys()[0] || '';
+            const session = new LiveAudioSession({
+                apiKey: activeKey,
+                onStateChange: (state) => {
+                    setLiveState(state);
+                },
+                onMessage: (msg) => {
+                    if (msg.outputTranscript) {
+                        setLiveTranscript(prev => prev + ' ' + msg.outputTranscript);
+                    }
+                    if (msg.text) {
+                        setLiveTranscript(prev => prev + ' ' + msg.text);
+                    }
+                    if (msg.closed) {
+                        setLiveState('idle');
+                    }
+                },
+                onError: (err) => {
+                    toast.error(err.message || 'Live voice session error');
+                    setLiveState('idle');
+                }
+            });
+
+            liveSessionRef.current = session;
+            await session.start();
+            toast.success('Live Voice Advisor connected! Start speaking.');
+        } catch (err) {
+            toast.error(err.message || 'Microphone access denied or connection failed');
+            setLiveState('idle');
+        }
+    };
 
     const sendMessage = async (messageText = null) => {
         const text = (messageText || input).trim();
@@ -38,19 +104,92 @@ const ChatAssistant = () => {
         setInput('');
         setLoading(true);
 
+        // Add empty placeholder assistant message for streaming token updates
+        setMessages(prev => [...prev, { role: 'assistant', content: '' }]);
+
         try {
-            const res = await API.post('/ai/chat', { 
-                message: text,
-                timeframe: contextTimeframe 
+            const storedKeys = loadGeminiKeys();
+            const activeKey = storedKeys[0] || '';
+            const headers = { 'Content-Type': 'application/json' };
+            if (activeKey) {
+                headers['x-gemini-key'] = activeKey;
+            }
+
+            const response = await fetch('/api/ai/chat/stream', {
+                method: 'POST',
+                headers,
+                body: JSON.stringify({
+                    message: text,
+                    timeframe: contextTimeframe,
+                    history: messages
+                })
             });
-            const aiReply = res.data?.data?.reply || 'I reviewed your data, but could not produce a response. Please try asking again.';
-            setMessages(prev => [...prev, { role: 'assistant', content: aiReply }]);
-        } catch (err) {
-            toast.error(err.response?.data?.message || err.message || 'Failed to get response');
-            setMessages(prev => [...prev, {
-                role: 'assistant',
-                content: 'I encountered an error analyzing your data. Please check your connection or try again.'
-            }]);
+
+            if (!response.ok || !response.body) {
+                throw new Error('Streaming unavailable');
+            }
+
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let accumulated = '';
+
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                const chunk = decoder.decode(value, { stream: true });
+                const lines = chunk.split('\n');
+                for (const line of lines) {
+                    if (line.startsWith('data: ')) {
+                        const dataStr = line.slice(6).trim();
+                        if (dataStr === '[DONE]') continue;
+                        try {
+                            const parsed = JSON.parse(dataStr);
+                            if (parsed.text) {
+                                accumulated += parsed.text;
+                                setMessages(prev => {
+                                    const next = [...prev];
+                                    next[next.length - 1] = { role: 'assistant', content: accumulated };
+                                    return next;
+                                });
+                            }
+                        } catch {
+                            // Non-JSON or partial line
+                        }
+                    }
+                }
+            }
+
+            if (!accumulated.trim()) {
+                // Fallback to standard endpoint if stream returned no tokens
+                const res = await API.post('/ai/chat', { message: text, timeframe: contextTimeframe });
+                const reply = res.data?.data?.reply || 'I reviewed your accounts, but could not produce a response.';
+                setMessages(prev => {
+                    const next = [...prev];
+                    next[next.length - 1] = { role: 'assistant', content: reply };
+                    return next;
+                });
+            }
+        } catch {
+            // Graceful fallback to regular POST /ai/chat
+            try {
+                const res = await API.post('/ai/chat', { message: text, timeframe: contextTimeframe });
+                const reply = res.data?.data?.reply || 'I reviewed your accounts, but could not produce a response.';
+                setMessages(prev => {
+                    const next = [...prev];
+                    next[next.length - 1] = { role: 'assistant', content: reply };
+                    return next;
+                });
+            } catch (err) {
+                toast.error(err.response?.data?.message || err.message || 'Failed to get response');
+                setMessages(prev => {
+                    const next = [...prev];
+                    next[next.length - 1] = {
+                        role: 'assistant',
+                        content: 'I encountered an error analyzing your data. Please check your connection or try again.'
+                    };
+                    return next;
+                });
+            }
         } finally {
             setLoading(false);
         }
@@ -81,11 +220,49 @@ const ChatAssistant = () => {
                     </div>
                     <div>
                         <h2 style={{ fontSize: '1rem', fontWeight: 700, margin: 0 }}>Financial Advisor Chat</h2>
-                        <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Answers based strictly on your recorded transactions</span>
+                        <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Server-side streaming & Live voice powered by Gemini 3.8</span>
                     </div>
                 </div>
 
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+                    {/* Live Voice API Button */}
+                    <button
+                        type="button"
+                        onClick={toggleLiveSession}
+                        className={`btn btn-sm ${liveState === 'active' ? 'btn-danger' : 'btn-outline'}`}
+                        style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '0.35rem',
+                            fontWeight: 600,
+                            borderRadius: 'var(--radius-full)',
+                            padding: '0.3rem 0.75rem',
+                            fontSize: '0.78rem',
+                            borderColor: liveState === 'active' ? 'var(--color-danger)' : 'var(--color-primary)',
+                            color: liveState === 'active' ? '#FFFFFF' : 'var(--color-primary)',
+                            backgroundColor: liveState === 'active' ? 'var(--color-danger)' : 'var(--color-primary-subtle)'
+                        }}
+                        title={liveState === 'active' ? 'Stop Live Voice Session' : 'Start Live Voice Session (Gemini 3.8 Live)'}
+                        aria-label="Toggle Live Voice Advisor"
+                    >
+                        {liveState === 'active' ? (
+                            <>
+                                <HiOutlineStop aria-hidden="true" />
+                                <span>End Voice</span>
+                            </>
+                        ) : liveState === 'connecting' ? (
+                            <>
+                                <span className="spinner" style={{ width: '12px', height: '12px', borderWidth: '2px' }} />
+                                <span>Connecting...</span>
+                            </>
+                        ) : (
+                            <>
+                                <HiOutlineMicrophone aria-hidden="true" />
+                                <span>Live Voice</span>
+                            </>
+                        )}
+                    </button>
+
                     <label htmlFor="chat-timeframe" className="sr-only">Data Timeframe</label>
                     <select
                         id="chat-timeframe"
@@ -101,7 +278,39 @@ const ChatAssistant = () => {
                 </div>
             </div>
 
-            {/* Suggested Question Pills — horizontal scroll, header stays fixed */}
+            {/* Live Audio Banner when Live session is active */}
+            {liveState === 'active' && (
+                <div style={{
+                    backgroundColor: '#ECFDF5',
+                    borderBottom: '1px solid #A7F3D0',
+                    padding: '0.65rem 1.25rem',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    fontSize: '0.8125rem',
+                    color: '#065F46',
+                    flexShrink: 0
+                }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                        <span style={{
+                            display: 'inline-block',
+                            width: '8px',
+                            height: '8px',
+                            borderRadius: '50%',
+                            backgroundColor: '#059669',
+                            animation: 'pulse 1.5s infinite'
+                        }} />
+                        <strong>Live Voice Advisor Active (Gemini 3.8 Live):</strong> Speak freely into your microphone.
+                    </div>
+                    {liveTranscript && (
+                        <span style={{ fontSize: '0.75rem', color: '#047857', maxWidth: '40%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {liveTranscript}
+                        </span>
+                    )}
+                </div>
+            )}
+
+            {/* Suggested Question Pills */}
             <div style={{ 
                 padding: '0.625rem 1rem', 
                 backgroundColor: 'var(--bg-surface-subtle)', 
@@ -118,7 +327,7 @@ const ChatAssistant = () => {
                         key={q}
                         type="button"
                         onClick={() => sendMessage(q)}
-                        disabled={loading}
+                        disabled={loading || liveState === 'active'}
                         className="btn btn-outline btn-sm"
                         style={{ height: '32px', borderRadius: 'var(--radius-full)', fontSize: '0.8125rem', padding: '0 10px', backgroundColor: '#FFFFFF', flexShrink: 0 }}
                     >
@@ -127,7 +336,7 @@ const ChatAssistant = () => {
                 ))}
             </div>
 
-            {/* Chat Messages Log — this is the only scrollable region */}
+            {/* Chat Messages Log */}
             <div style={{ 
                 flex: 1, 
                 padding: '1.25rem', 
@@ -137,7 +346,7 @@ const ChatAssistant = () => {
                 flexDirection: 'column', 
                 gap: '1rem',
                 backgroundColor: 'var(--bg-primary)',
-                minHeight: 0,      /* critical: allows flex child to shrink below content height */
+                minHeight: 0,
                 WebkitOverflowScrolling: 'touch'
             }}>
                 {messages.map((msg, index) => {
@@ -174,14 +383,21 @@ const ChatAssistant = () => {
                                 {isUser ? (
                                     <p style={{ margin: 0, color: 'inherit' }}>{msg.content}</p>
                                 ) : (
-                                    <AdvisorMarkdown content={msg.content} />
+                                    msg.content ? (
+                                        <AdvisorMarkdown content={msg.content} />
+                                    ) : (
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', color: 'var(--text-secondary)' }}>
+                                            <div className="spinner" style={{ width: '14px', height: '14px' }} />
+                                            <span style={{ fontSize: '0.85rem' }}>Streaming response...</span>
+                                        </div>
+                                    )
                                 )}
                             </div>
                         </div>
                     );
                 })}
 
-                {loading && (
+                {loading && messages[messages.length - 1]?.content !== '' && (
                     <div style={{ alignSelf: 'flex-start', maxWidth: '85%' }}>
                         <div style={{
                             padding: '0.75rem 1rem',
@@ -202,7 +418,7 @@ const ChatAssistant = () => {
                 <div ref={messagesEndRef} />
             </div>
 
-            {/* Input Bar — sticky at bottom, never scrolls */}
+            {/* Input Bar */}
             <div style={{ 
                 padding: '0.875rem 1.25rem', 
                 borderTop: '1px solid var(--border-color)',
@@ -219,7 +435,7 @@ const ChatAssistant = () => {
                     value={input}
                     onChange={(e) => setInput(e.target.value)}
                     onKeyDown={handleKeyDown}
-                    placeholder="Ask about your spending, leaks, or savings..."
+                    placeholder={liveState === 'active' ? 'Live voice active — speak into your mic or type here...' : 'Ask about your spending, leaks, or savings...'}
                     className="form-input"
                     disabled={loading}
                     style={{ flex: 1, minHeight: '44px' }}

@@ -106,5 +106,7 @@ export function clearGeminiKeys(storage) {
 }
 
 export function getGeminiKeyCount(storage) {
-    return loadGeminiKeys(storage).length;
+    const envKey = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_GEMINI_API_KEY) || '';
+    const storedCount = loadGeminiKeys(storage).length;
+    return envKey ? Math.max(storedCount, 1) : storedCount;
 }
