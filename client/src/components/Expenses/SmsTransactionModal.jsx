@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import {
     HiOutlineCheck,
     HiOutlineXMark,
@@ -6,7 +6,8 @@ import {
     HiOutlineCreditCard,
     HiOutlineCheckCircle,
     HiOutlineExclamationTriangle,
-    HiOutlineTrash
+    HiOutlineTrash,
+    HiOutlineArrowPath
 } from 'react-icons/hi2';
 import API from '../../api/axios';
 import { useCategories } from '../../hooks/useCategories';
@@ -19,17 +20,19 @@ const isValidItem = (item) => {
     return Number.isFinite(amount) && amount > 0 && isValidDate(item.date) && Boolean(item.category);
 };
 
-const SmsTransactionModal = ({ transactions = [], onClose, onSaved }) => {
+const toEditableItems = (list) => (Array.isArray(list) ? list : []).map(item => ({
+    ...item,
+    amount: item.amount !== undefined && item.amount !== null ? String(item.amount) : '',
+    _selected: !item.needsReview && Number(item.amount) > 0
+}));
+
+const SmsTransactionModal = ({ transactions = [], onClose, onSaved, onRefresh }) => {
     const { categoryNames } = useCategories();
-    const [items, setItems] = useState(() =>
-        (Array.isArray(transactions) ? transactions : []).map(item => ({
-            ...item,
-            amount: item.amount !== undefined && item.amount !== null ? String(item.amount) : '',
-            _selected: !item.needsReview && Number(item.amount) > 0
-        }))
-    );
+    const [items, setItems] = useState(() => toEditableItems(transactions));
     const [saving, setSaving] = useState(false);
+    const [refreshing, setRefreshing] = useState(false);
     const [savedCount, setSavedCount] = useState(0);
+    const refreshInFlightRef = useRef(false);
 
     const selectedItems = useMemo(
         () => items.filter(item => item._selected && isValidItem(item)),
@@ -116,6 +119,33 @@ const SmsTransactionModal = ({ transactions = [], onClose, onSaved }) => {
         }
     };
 
+    const refreshResults = async () => {
+        if (!onRefresh || refreshInFlightRef.current) return;
+        refreshInFlightRef.current = true;
+        setRefreshing(true);
+        try {
+            const fresh = await onRefresh();
+            if (!Array.isArray(fresh)) {
+                throw new Error('The AI returned an invalid SMS result.');
+            }
+            const nextItems = toEditableItems(fresh);
+            setItems(nextItems);
+            toast.success(
+                nextItems.length > 0
+                    ? 'SMS results refreshed from AI.'
+                    : 'No debit transactions were found in these messages.'
+            );
+        } catch (err) {
+            const reason = err?.message
+                ? `${err.message} Previous results were kept.`
+                : 'Could not refresh SMS results. Previous results were kept.';
+            toast.error(reason);
+        } finally {
+            refreshInFlightRef.current = false;
+            setRefreshing(false);
+        }
+    };
+
     if (items.length === 0) {
         return (
             <div className="modal-overlay" onClick={onClose} role="dialog">
@@ -161,9 +191,27 @@ const SmsTransactionModal = ({ transactions = [], onClose, onSaved }) => {
                             Review {items.length} Detected {items.length === 1 ? 'Debit' : 'Debits'}
                         </h2>
                     </div>
-                    <button type="button" className="modal-close-btn" onClick={onClose} aria-label="Close dialog">
-                        <HiOutlineXMark aria-hidden="true" />
-                    </button>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                        {onRefresh && (
+                            <button
+                                type="button"
+                                className="btn btn-outline btn-sm"
+                                onClick={refreshResults}
+                                disabled={saving || refreshing}
+                                title="Re-run AI on these messages"
+                                aria-label="Refresh SMS AI results"
+                            >
+                                <HiOutlineArrowPath
+                                    className={refreshing ? 'spinner' : ''}
+                                    aria-hidden="true"
+                                />
+                                <span>{refreshing ? 'Refreshing...' : 'Refresh'}</span>
+                            </button>
+                        )}
+                        <button type="button" className="modal-close-btn" onClick={onClose} aria-label="Close dialog">
+                            <HiOutlineXMark aria-hidden="true" />
+                        </button>
+                    </div>
                 </div>
 
                 {/* Selection summary */}

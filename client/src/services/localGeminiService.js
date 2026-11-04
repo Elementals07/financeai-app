@@ -50,9 +50,16 @@ const SUPPORTED_RECEIPT_MIME_TYPES = new Set([
 const MAX_RECEIPT_IMAGE_BYTES = 8 * 1024 * 1024;
 const VISION_MODEL_PATTERN = /gemini.*(?:flash|pro|vision)/i;
 const NON_VISION_MODEL_PATTERN = /embedding|imagen|veo|aqa/i;
+const AI_CACHE_VERSION = 1;
+const RECEIPT_CACHE_TYPE = 'receipt_scan';
+const SMS_CACHE_TYPE = 'sms_parse';
+const RECEIPT_PROMPT_VERSION = 2;
+const SMS_PROMPT_VERSION = 2;
+const SMS_CHUNK_SIZE = 15;
 
 let activeKeyIndex = 0;
 let modelCache = null;
+const inFlightAiRequests = new Map();
 
 // Test-only hook so simulated tests can pin the rotation start index.
 export const geminiTestHooks = {
@@ -222,6 +229,126 @@ function backoffDelayMs(attempt, random = Math.random) {
     const base = Math.min(1000 * 2 ** attempt, MAX_BACKOFF_MS);
     const jitter = 0.5 + (random() * 0.5);
     return Math.round(base * jitter);
+}
+
+function stableStringify(value) {
+    if (value === undefined) return 'null';
+    if (value === null || typeof value !== 'object') return JSON.stringify(value);
+    if (Array.isArray(value)) {
+        return `[${value.map(stableStringify).join(',')}]`;
+    }
+    return `{${Object.keys(value).sort().map(key => (
+        `${JSON.stringify(key)}:${stableStringify(value[key])}`
+    )).join(',')}}`;
+}
+
+async function sha256Hex(value) {
+    const subtle = globalThis.crypto?.subtle;
+    if (!subtle) {
+        throw new Error('Secure hashing is not available in this environment.');
+    }
+    const bytes = typeof value === 'string' ? new TextEncoder().encode(value) : value;
+    const digest = await subtle.digest('SHA-256', bytes);
+    return Array.from(
+        new Uint8Array(digest),
+        byte => byte.toString(16).padStart(2, '0')
+    ).join('');
+}
+
+function base64ToBytes(base64) {
+    if (typeof globalThis.atob === 'function') {
+        const binary = globalThis.atob(base64);
+        const bytes = new Uint8Array(binary.length);
+        for (let index = 0; index < binary.length; index++) {
+            bytes[index] = binary.charCodeAt(index);
+        }
+        return bytes;
+    }
+
+    const BufferCtor = globalThis.Buffer;
+    if (typeof BufferCtor === 'function') {
+        const buffer = BufferCtor.from(base64, 'base64');
+        return new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+    }
+
+    throw new Error('No base64 decoder available.');
+}
+
+async function buildAiCacheKey(type, userId, contentHash, params) {
+    const paramsHash = await sha256Hex(stableStringify({
+        version: AI_CACHE_VERSION,
+        type,
+        userId,
+        params
+    }));
+    return `ai_${type}_v${AI_CACHE_VERSION}_u${userId}_${contentHash}_${paramsHash}`;
+}
+
+async function readAiCache(cacheKey, type) {
+    try {
+        const row = await db.ai_insights_cache.get(cacheKey);
+        if (!row || row.cache_version !== AI_CACHE_VERSION || row.type !== type) {
+            return null;
+        }
+        return row.response ?? null;
+    } catch (error) {
+        logAiEvent('ai-cache.read-failed', {
+            type,
+            reason: sanitizeErrorMessage(error.message)
+        });
+        return null;
+    }
+}
+
+async function writeAiCache({ cacheKey, type, userId, contentHash, params, response }) {
+    try {
+        await db.ai_insights_cache.put({
+            id: cacheKey,
+            user_id: userId,
+            type,
+            prompt_hash: contentHash,
+            response,
+            cache_version: AI_CACHE_VERSION,
+            cache_params: params,
+            created_at: new Date().toISOString(),
+            expires_at: null
+        });
+        logAiEvent('ai-cache.write', { type, version: AI_CACHE_VERSION });
+    } catch (error) {
+        logAiEvent('ai-cache.write-failed', {
+            type,
+            reason: sanitizeErrorMessage(error.message)
+        });
+    }
+}
+
+async function runDeduped(key, task) {
+    if (!key) return task();
+    if (inFlightAiRequests.has(key)) {
+        logAiEvent('ai-cache.in-flight', { key });
+        return inFlightAiRequests.get(key);
+    }
+
+    const promise = Promise.resolve().then(task);
+    const tracked = promise.finally(() => {
+        if (inFlightAiRequests.get(key) === tracked) {
+            inFlightAiRequests.delete(key);
+        }
+    });
+    inFlightAiRequests.set(key, tracked);
+    return tracked;
+}
+
+function normalizeSmsCacheContent(messages) {
+    return messages.map(message => ({
+        id: String(message?.id ?? ''),
+        address: String(message?.address ?? message?.from ?? '').trim().toLowerCase(),
+        body: String(message?.body ?? '').replace(/\s+/g, ' ').trim().toLowerCase(),
+        date: message?.date ?? null
+    })).sort((left, right) => (
+        left.id.localeCompare(right.id)
+        || left.body.localeCompare(right.body)
+    ));
 }
 
 export function isVisionCapableModel(model) {
@@ -951,12 +1078,50 @@ export const localGeminiService = {
     /**
      * Native receipt image OCR via Gemini Vision
      */
-    async scanReceiptImage(base64Image, mimeType = 'image/jpeg') {
+    async scanReceiptImage(base64Image, mimeType = 'image/jpeg', options = {}) {
+        const forceRefresh = Boolean(options.refresh);
         const image = decodeReceiptImage(base64Image, mimeType);
+        const user = await localExpenseService.getCurrentUser();
         const categories = await localExpenseService.getCategories();
         const categoryNames = categories.map(c => c.name);
         const validCategories = categoryNames.join(', ') || 'Food, Travel, Rent, Entertainment, Shopping, Utilities, Health, Education, Others';
+        const cacheParams = {
+            promptVersion: RECEIPT_PROMPT_VERSION,
+            model: GEMINI_CONFIG.model,
+            fallbackModels: GEMINI_CONFIG.fallbackModels,
+            mimeType: image.mimeType,
+            categories: categoryNames
+        };
 
+        let cacheKey = null;
+        let contentHash = null;
+        try {
+            contentHash = await sha256Hex(base64ToBytes(image.data));
+            cacheKey = await buildAiCacheKey(
+                RECEIPT_CACHE_TYPE,
+                user?.id ?? 1,
+                contentHash,
+                cacheParams
+            );
+        } catch (error) {
+            logAiEvent('ai-cache.unavailable', {
+                type: RECEIPT_CACHE_TYPE,
+                reason: sanitizeErrorMessage(error.message)
+            });
+        }
+
+        if (!forceRefresh && cacheKey) {
+            const cached = await readAiCache(cacheKey, RECEIPT_CACHE_TYPE);
+            if (cached) {
+                logAiEvent('feature.receipt-cache-hit', {
+                    mimeType: image.mimeType,
+                    version: AI_CACHE_VERSION
+                });
+                return cached;
+            }
+        }
+
+        const executeScan = async () => {
         const prompt = `You are an expert OCR receipt parsing engine for an Indian personal finance app.
 Extract the receipt into a single valid JSON object with these fields:
 1. "merchant": Store, vendor, shop, hospital, or company name (e.g. "D-Mart", "Apollo Pharmacy", "Swiggy", "Indian Oil"). If unknown, use "Local Store".
@@ -1055,22 +1220,42 @@ CRITICAL: Return ONLY raw JSON without markdown code fences or backticks.`;
             );
         }
 
+        if (cacheKey) {
+            await writeAiCache({
+                cacheKey,
+                type: RECEIPT_CACHE_TYPE,
+                userId: user?.id ?? 1,
+                contentHash,
+                params: cacheParams,
+                response: normalized
+            });
+        }
+
         logAiEvent('feature.receipt-scan-complete', {
             items: normalized.items.length,
             hasTotal: normalized.totalAmount > 0,
             hasDate: Boolean(normalized.billDate),
-            warnings: normalized.warnings.length
+            warnings: normalized.warnings.length,
+            refreshed: forceRefresh
         });
 
         return normalized;
+        };
+
+        const dedupeKey = cacheKey
+            ? `${cacheKey}:${forceRefresh ? 'refresh' : 'normal'}`
+            : null;
+        return runDeduped(dedupeKey, executeScan);
     },
 
     /**
      * Parses a batch of transactional bank/UPI SMS messages into structured expenses
      */
-    async parseBankSms(messages = []) {
+    async parseBankSms(messages = [], options = {}) {
         if (!Array.isArray(messages) || messages.length === 0) return [];
 
+        const forceRefresh = Boolean(options.refresh);
+        const user = await localExpenseService.getCurrentUser();
         const categories = await localExpenseService.getCategories();
         const categoryNames = categories.map(c => c.name);
         const validCategories = categoryNames.join(', ') || 'Food, Travel, Rent, Entertainment, Shopping, Utilities, Health, Education, Others';
@@ -1082,6 +1267,46 @@ CRITICAL: Return ONLY raw JSON without markdown code fences or backticks.`;
 
         if (candidates.length === 0) return [];
 
+        const cacheParams = {
+            promptVersion: SMS_PROMPT_VERSION,
+            model: GEMINI_CONFIG.model,
+            fallbackModels: GEMINI_CONFIG.fallbackModels,
+            categories: categoryNames,
+            chunkSize: SMS_CHUNK_SIZE
+        };
+
+        let cacheKey = null;
+        let contentHash = null;
+        try {
+            contentHash = await sha256Hex(stableStringify(
+                normalizeSmsCacheContent(candidates)
+            ));
+            cacheKey = await buildAiCacheKey(
+                SMS_CACHE_TYPE,
+                user?.id ?? 1,
+                contentHash,
+                cacheParams
+            );
+        } catch (error) {
+            logAiEvent('ai-cache.unavailable', {
+                type: SMS_CACHE_TYPE,
+                reason: sanitizeErrorMessage(error.message)
+            });
+        }
+
+        if (!forceRefresh && cacheKey) {
+            const cached = await readAiCache(cacheKey, SMS_CACHE_TYPE);
+            if (Array.isArray(cached)) {
+                logAiEvent('feature.sms-cache-hit', {
+                    messages: candidates.length,
+                    transactions: cached.length,
+                    version: AI_CACHE_VERSION
+                });
+                return cached;
+            }
+        }
+
+        const executeParse = async () => {
         const buildPrompt = (smsData) => `You are a strict financial NLP parser for Indian banking and UPI messages.
 Extract only completed money-out (debit/expense) transactions from the messages below.
 
@@ -1115,13 +1340,15 @@ CRITICAL: Return ONLY a raw JSON array without markdown code blocks:
   { "smsId": "...", "merchant": "...", "amount": 100, "date": "YYYY-MM-DD", "category": "...", "type": "debit", "confidence": 0.9, "uncertain": false }
 ]`;
 
-        logAiEvent('feature.sms-parse', { messages: candidates.length });
+        logAiEvent('feature.sms-parse', {
+            messages: candidates.length,
+            refreshed: forceRefresh
+        });
 
-        const CHUNK_SIZE = 15;
         const normalized = [];
 
-        for (let index = 0; index < candidates.length; index += CHUNK_SIZE) {
-            const chunk = candidates.slice(index, index + CHUNK_SIZE);
+        for (let index = 0; index < candidates.length; index += SMS_CHUNK_SIZE) {
+            const chunk = candidates.slice(index, index + SMS_CHUNK_SIZE);
             const smsData = chunk.map(message => ({
                 id: String(message.id),
                 from: maskSender(message.address),
@@ -1142,11 +1369,42 @@ CRITICAL: Return ONLY a raw JSON array without markdown code blocks:
                 }
             }, { feature: 'sms-parse' });
 
-            const text = extractGeminiResponseText(res) || '[]';
-            const parsed = parseJsonSafely(text, []);
+            const text = extractGeminiResponseText(res).trim();
+            const parsed = parseJsonSafely(text, null);
+            if (!Array.isArray(parsed)) {
+                logAiEvent('feature.sms-parse-failed', {
+                    reason: text ? 'malformed-response' : 'empty-response'
+                });
+                throw new Error(
+                    'Gemini returned an unreadable SMS response. Please try again.'
+                );
+            }
             normalized.push(...normalizeSmsParse(parsed, chunk, categoryNames));
         }
 
+        if (cacheKey) {
+            await writeAiCache({
+                cacheKey,
+                type: SMS_CACHE_TYPE,
+                userId: user?.id ?? 1,
+                contentHash,
+                params: cacheParams,
+                response: normalized
+            });
+        }
+
+        logAiEvent('feature.sms-parse-complete', {
+            messages: candidates.length,
+            transactions: normalized.length,
+            refreshed: forceRefresh
+        });
+
         return normalized;
+        };
+
+        const dedupeKey = cacheKey
+            ? `${cacheKey}:${forceRefresh ? 'refresh' : 'normal'}`
+            : null;
+        return runDeduped(dedupeKey, executeParse);
     }
 };

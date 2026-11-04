@@ -188,7 +188,9 @@ const API = {
 
         // 9. AI Scan Bill
         if (cleanUrl === '/ai/scan-bill') {
-            const res = await localGeminiService.scanReceiptImage(body.image, body.mimeType);
+            const res = await localGeminiService.scanReceiptImage(body.image, body.mimeType, {
+                refresh: Boolean(body.refresh)
+            });
             return {
                 data: {
                     success: true,

@@ -48,9 +48,18 @@ export const smsService = {
     /**
      * Sends only locally filtered messages to the AI backend for structured parsing.
      */
-    async analyzeSmsWithAI(messages) {
+    async analyzeSmsWithAI(messages, options = {}) {
         if (!Array.isArray(messages) || messages.length === 0) return [];
-        return await localGeminiService.parseBankSms(messages);
+        return await localGeminiService.parseBankSms(messages, options);
+    },
+
+    /**
+     * Re-runs AI parsing for the same source messages, bypassing and then
+     * replacing the cached result for that exact content.
+     */
+    async refreshSmsAnalysis(messages) {
+        if (!Array.isArray(messages) || messages.length === 0) return [];
+        return await localGeminiService.parseBankSms(messages, { refresh: true });
     }
 };
 

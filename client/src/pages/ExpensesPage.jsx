@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import API from '../api/axios';
 import ExpenseForm from '../components/Expenses/ExpenseForm';
 import ExpenseList from '../components/Expenses/ExpenseList';
@@ -28,7 +28,9 @@ const ExpensesPage = () => {
     const [showScanner, setShowScanner] = useState(false);
     const [showSmsModal, setShowSmsModal] = useState(false);
     const [smsTransactions, setSmsTransactions] = useState([]);
+    const [smsSourceMessages, setSmsSourceMessages] = useState([]);
     const [scanningSms, setScanningSms] = useState(false);
+    const smsScanInFlightRef = useRef(false);
     const [editExpense, setEditExpense] = useState(null);
     const [deletingId, setDeletingId] = useState(null);
     
@@ -129,10 +131,13 @@ const ExpensesPage = () => {
     };
 
     const handleScanSms = async () => {
+        if (smsScanInFlightRef.current) return;
+        smsScanInFlightRef.current = true;
         setScanningSms(true);
         const toastId = toast.loading('Reading bank & UPI messages...');
         try {
             const messages = await smsService.fetchRecentBankSms(30);
+            setSmsSourceMessages(messages);
             if (messages.length === 0) {
                 toast.dismiss(toastId);
                 toast.success('No new untracked bank messages found!');
@@ -154,8 +159,15 @@ const ExpensesPage = () => {
             toast.dismiss(toastId);
             toast.error('Could not scan SMS: ' + (err.message || 'Permission denied'));
         } finally {
+            smsScanInFlightRef.current = false;
             setScanningSms(false);
         }
+    };
+
+    const handleRefreshSmsResults = async () => {
+        const fresh = await smsService.refreshSmsAnalysis(smsSourceMessages);
+        setSmsTransactions(fresh);
+        return fresh;
     };
 
     const totalFilteredAmount = expenses.reduce((sum, e) => sum + parseFloat(e.amount || 0), 0);
@@ -334,6 +346,7 @@ const ExpensesPage = () => {
                     transactions={smsTransactions}
                     onClose={() => setShowSmsModal(false)}
                     onSaved={() => fetchExpenses(1, false)}
+                    onRefresh={handleRefreshSmsResults}
                 />
             )}
 

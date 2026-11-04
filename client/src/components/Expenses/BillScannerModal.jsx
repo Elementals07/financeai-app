@@ -30,6 +30,7 @@ const formatMoney = (value) => {
 const BillScannerModal = ({ onClose, onSuccess }) => {
     const { categoryNames } = useCategories();
     const fileInputRef = useRef(null);
+    const scanInFlightRef = useRef(false);
 
     const [imagePreview, setImagePreview] = useState(null);
     const [mimeType, setMimeType] = useState('image/jpeg');
@@ -136,19 +137,27 @@ const BillScannerModal = ({ onClose, onSuccess }) => {
         }
     };
 
-    // Send to OCR API endpoint
-    const processImageScan = async (base64, type) => {
+    // Send to OCR API endpoint (or refresh the same image while bypassing cache)
+    const processImageScan = async (base64, type, options = {}) => {
+        if (scanInFlightRef.current) return;
+        const refresh = Boolean(options.refresh);
+        const previousScanError = scanError;
+        scanInFlightRef.current = true;
         setScanning(true);
-        setScanError(null);
-        setAiWarnings([]);
-        setReceiptConfirmed(false);
-        setDuplicateAcknowledged(false);
-        setDuplicateWarning(null);
+
+        if (!refresh) {
+            setScanError(null);
+            setAiWarnings([]);
+            setReceiptConfirmed(false);
+            setDuplicateAcknowledged(false);
+            setDuplicateWarning(null);
+        }
 
         try {
             const res = await API.post('/ai/scan-bill', {
                 image: base64,
-                mimeType: type || mimeType
+                mimeType: type || mimeType,
+                refresh
             });
 
             const data = res.data.data || {};
@@ -165,17 +174,38 @@ const BillScannerModal = ({ onClose, onSuccess }) => {
             })));
             setAiWarnings(Array.isArray(data.warnings) ? data.warnings.filter(Boolean) : []);
             setSaveMode(detectedItems.length > 0 ? 'split' : 'single');
+            setScanError(null);
+            setReceiptConfirmed(false);
+            setDuplicateAcknowledged(false);
+            setDuplicateWarning(null);
 
             setStep(2);
-            toast.success('Bill extracted. Review the details and choose how to save it.');
+            toast.success(
+                refresh
+                    ? 'Receipt refreshed. Review the updated details before saving.'
+                    : 'Bill extracted. Review the details and choose how to save it.'
+            );
         } catch (err) {
-            setScanError(err?.message || 'The receipt could not be read automatically.');
-            toast.error('Could not auto-read the bill. You can still enter the details manually.');
-            setSaveMode('single');
-            setStep(2); // Allow manual entry even if scanning had issues
+            if (refresh) {
+                setScanError(previousScanError);
+                toast.error(
+                    'Could not refresh the receipt with AI. Previous details were kept.'
+                );
+            } else {
+                setScanError(err?.message || 'The receipt could not be read automatically.');
+                toast.error('Could not auto-read the bill. You can still enter the details manually.');
+                setSaveMode('single');
+                setStep(2); // Allow manual entry even if scanning had issues
+            }
         } finally {
+            scanInFlightRef.current = false;
             setScanning(false);
         }
+    };
+
+    const handleRefreshScan = () => {
+        if (!imagePreview || scanInFlightRef.current) return;
+        processImageScan(imagePreview, mimeType, { refresh: true });
     };
 
     const handleItemChange = (index, field, value) => {
@@ -458,7 +488,21 @@ const BillScannerModal = ({ onClose, onSuccess }) => {
                                     <button
                                         type="button"
                                         className="btn btn-outline btn-sm"
+                                        onClick={handleRefreshScan}
+                                        disabled={scanning}
+                                        title="Re-run AI on this image and bypass the saved result"
+                                    >
+                                        <HiOutlineArrowPath
+                                            className={scanning ? 'spinner' : ''}
+                                            aria-hidden="true"
+                                        />
+                                        {scanning ? 'Refreshing...' : 'Refresh AI'}
+                                    </button>
+                                    <button
+                                        type="button"
+                                        className="btn btn-outline btn-sm"
                                         onClick={handleRescan}
+                                        disabled={scanning}
                                     >
                                         <HiOutlineArrowPath aria-hidden="true" /> Re-scan
                                     </button>
