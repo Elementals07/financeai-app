@@ -21,8 +21,9 @@ export const GEMINI_CONFIG = {
     // Stable alias tracking the current Flash model. It supports text,
     // image input and function calling.
     model: 'gemini-flash-latest',
-    // Consulted in order when the primary model is unavailable to the
-    // project (HTTP 404) or repeatedly returns a server-side error (5xx).
+    // Small, explicit list consulted in order when the primary model is
+    // unavailable (HTTP 404) or repeatedly returns a server-side error (5xx).
+    // Discovery never adds models here: this list is the complete fallback set.
     fallbackModels: [
         'gemini-3.8-flash',
         'gemini-2.5-flash',
@@ -30,13 +31,25 @@ export const GEMINI_CONFIG = {
     ]
 };
 
-// Temporary failures eligible for bounded exponential backoff. Attrition
-// of quota (429) additionally rotates to the next configured key.
+// Temporary failures eligible for bounded exponential backoff. Quota
+// exhaustion (429) additionally rotates to the next configured key.
 const RETRYABLE_HTTP_STATUSES = new Set([429, 500, 502, 503, 504]);
+// Hard cap: every model gets at most two attempts (the first try plus one retry).
+const MAX_RETRIES_PER_MODEL = 1;
 const MAX_BACKOFF_MS = 8000;
 const DEFAULT_REQUEST_TIMEOUT_MS = 30000;
 const DEFAULT_TOTAL_TIMEOUT_MS = 90000;
 const MODEL_CACHE_TTL_MS = 10 * 60 * 1000;
+const SUPPORTED_RECEIPT_MIME_TYPES = new Set([
+    'image/jpeg',
+    'image/png',
+    'image/webp',
+    'image/heic',
+    'image/heif'
+]);
+const MAX_RECEIPT_IMAGE_BYTES = 8 * 1024 * 1024;
+const VISION_MODEL_PATTERN = /gemini.*(?:flash|pro|vision)/i;
+const NON_VISION_MODEL_PATTERN = /embedding|imagen|veo|aqa/i;
 
 let activeKeyIndex = 0;
 let modelCache = null;
@@ -197,8 +210,92 @@ function sanitizeErrorMessage(message) {
         .slice(0, 300);
 }
 
-function backoffDelayMs(attempt) {
-    return Math.min(1000 * 2 ** attempt, MAX_BACKOFF_MS);
+function failWithLog(message, detail = {}) {
+    logAiEvent('gemini.failure', {
+        ...detail,
+        error: sanitizeErrorMessage(message)
+    });
+    return new Error(message);
+}
+
+function backoffDelayMs(attempt, random = Math.random) {
+    const base = Math.min(1000 * 2 ** attempt, MAX_BACKOFF_MS);
+    const jitter = 0.5 + (random() * 0.5);
+    return Math.round(base * jitter);
+}
+
+export function isVisionCapableModel(model) {
+    const name = String(model || '').trim();
+    return Boolean(name)
+        && VISION_MODEL_PATTERN.test(name)
+        && !NON_VISION_MODEL_PATTERN.test(name);
+}
+
+function payloadRequiresVision(payload) {
+    const contents = Array.isArray(payload?.contents) ? payload.contents : [];
+    return contents.some(content =>
+        (Array.isArray(content?.parts) ? content.parts : []).some(part =>
+            Boolean(part?.inlineData || part?.fileData)
+        )
+    );
+}
+
+function decodeReceiptImage(input, mimeType) {
+    let raw = String(input || '').trim();
+    let declaredType = '';
+
+    if (/^data:/i.test(raw)) {
+        const commaIndex = raw.indexOf(',');
+        if (commaIndex !== -1) {
+            const header = raw.slice(5, commaIndex);
+            if (/;base64$/i.test(header.trim())) {
+                declaredType = header.split(';')[0];
+                raw = raw.slice(commaIndex + 1);
+            }
+        }
+    }
+
+    raw = raw.replace(/\s+/g, '');
+    let type = String(declaredType || mimeType || 'image/jpeg')
+        .split(';')[0]
+        .trim()
+        .toLowerCase();
+    if (type === 'image/jpg') type = 'image/jpeg';
+
+    if (!SUPPORTED_RECEIPT_MIME_TYPES.has(type)) {
+        throw new Error(
+            'Unsupported image type. Please use a JPEG, PNG, WebP, HEIC or HEIF photo of the receipt.'
+        );
+    }
+    if (!raw) {
+        throw new Error('No image data was selected. Please retake or choose the receipt photo again.');
+    }
+    if (!/^[A-Za-z0-9+/]+={0,2}$/.test(raw) || raw.replace(/=+$/, '').length % 4 === 1) {
+        throw new Error('The selected image data is invalid. Please retake or choose the receipt photo again.');
+    }
+
+    const padding = raw.endsWith('==') ? 2 : raw.endsWith('=') ? 1 : 0;
+    const bytes = Math.floor((raw.length * 3) / 4) - padding;
+    if (bytes <= 0) {
+        throw new Error('The selected image is empty. Please retake or choose the receipt photo again.');
+    }
+    if (bytes > MAX_RECEIPT_IMAGE_BYTES) {
+        throw new Error('The receipt image is too large. Please use an image smaller than 8 MB.');
+    }
+
+    const signatures = {
+        'image/jpeg': '/9j/',
+        'image/png': 'iVBOR',
+        'image/webp': 'UklGR'
+    };
+    const signature = signatures[type];
+    if (signature && !raw.startsWith(signature)) {
+        throw new Error(
+            'The selected file does not match its image type. Please retake or choose the receipt photo again.'
+        );
+    }
+
+    return { data: raw, mimeType: type, bytes };
 }
 
 class GeminiTimeoutError extends Error {
@@ -262,6 +359,7 @@ export function extractGeminiResponseText(response) {
 
 async function discoverAvailableModels({ keys, fetchFn, timeoutMs }) {
     if (modelCache && Date.now() - modelCache.at < MODEL_CACHE_TTL_MS) {
+        logAiEvent('gemini.models-cached', { count: modelCache.models.length });
         return modelCache.models;
     }
 
@@ -297,26 +395,33 @@ async function discoverAvailableModels({ keys, fetchFn, timeoutMs }) {
  *
  * - Authentication uses the documented `x-goog-api-key` header.
  * - Model availability is checked against Google's model list (cached for
- *   10 minutes) so projects that cannot access an alias automatically use an
- *   available Flash model instead of failing blindly.
- * - Permanent errors (400 invalid key, 401/403 auth or permission) fail
- *   immediately with Google's sanitized message and are never retried.
- * - Temporary errors (429, 5xx) retry with bounded exponential backoff,
- *   rotating to the next key on 429 (quota exhaustion is per key). Server
- *   side 5xx errors never rotate keys.
- * - 404 and repeated 5xx fall through to the next configured model.
+ *   10 minutes) purely for diagnostics; the configured primary and fallback
+ *   list never gains dynamically discovered models.
+ * - Every model gets at most two attempts. Permanent errors (400 invalid key,
+ *   401/403 auth or permission) fail immediately with Google's sanitized
+ *   message and are never retried or key-rotated.
+ * - Temporary errors (429, 5xx) retry once with bounded, jittered exponential
+ *   backoff. Only 429 rotates to the next configured key (quota exhaustion is
+ *   per key); server-side 5xx never rotates keys.
+ * - 404 and repeated 5xx fall through to the next explicit configured model.
  * - Every request has a timeout and the whole call has a deadline, so callers
- *   can never hang indefinitely.
+ *   can never hang indefinitely. Vision requests only consider models whose
+ *   names identify them as multimodal Flash/Pro models.
  *
  * Test hooks are injected via `options` (keys, fetchImpl, delayFn) so the
  * error-handling matrix can be exercised without network access.
  */
 export async function callGeminiDirect(payload, options = {}) {
-
-    const maxRetries = options.maxRetries ?? 2;
+    const feature = options.feature || 'ai';
+    const configuredRetries = Number(options.maxRetries);
+    const maxRetries = Number.isFinite(configuredRetries)
+        ? Math.min(MAX_RETRIES_PER_MODEL, Math.max(0, Math.floor(configuredRetries)))
+        : MAX_RETRIES_PER_MODEL;
     const requestTimeoutMs = options.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
     const totalTimeoutMs = options.totalTimeoutMs ?? DEFAULT_TOTAL_TIMEOUT_MS;
     const deadline = Date.now() + totalTimeoutMs;
+    const random = typeof options.random === 'function' ? options.random : Math.random;
+    const requireVision = options.requireVision ?? payloadRequiresVision(payload);
     const envKey = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_GEMINI_API_KEY) || '';
     const storedKeys = loadGeminiKeys();
     const effectiveKeys = envKey ? [envKey, ...storedKeys.filter(k => k !== envKey)] : storedKeys;
@@ -333,14 +438,28 @@ export async function callGeminiDirect(payload, options = {}) {
     const configuredModels = [GEMINI_CONFIG.model, ...GEMINI_CONFIG.fallbackModels];
     let models = configuredModels;
 
+    if (requireVision) {
+        models = configuredModels.filter(isVisionCapableModel);
+        if (models.length === 0) {
+            throw failWithLog(
+                'None of the configured Gemini models can read images. Add a vision-capable Flash model to GEMINI_CONFIG.',
+                { feature, models: configuredModels }
+            );
+        }
+        logAiEvent('gemini.vision-check', { feature, models });
+    }
+
     logAiEvent('gemini.start', {
+        feature,
         keys: keys.length,
         primaryModel: GEMINI_CONFIG.model,
-        fallbacks: GEMINI_CONFIG.fallbackModels
+        fallbacks: GEMINI_CONFIG.fallbackModels,
+        requireVision
     });
 
-    // Verify model availability on real (network) calls. Tests that inject a
-    // fetch implementation skip discovery unless explicitly requested.
+    // Verify model availability on real (network) calls. Discovery is only a
+    // diagnostic/optimization: the configured fallback list stays explicit and
+    // immutable. Tests that inject fetch skip discovery unless requested.
     const shouldDiscover = options.discoverModels ?? !options.fetchImpl;
     if (shouldDiscover) {
         try {
@@ -350,18 +469,18 @@ export async function callGeminiDirect(payload, options = {}) {
                 timeoutMs: Math.min(requestTimeoutMs, Math.max(2000, deadline - Date.now()))
             });
             const availableSet = new Set(available);
-            const preferred = configuredModels.filter(model => availableSet.has(model));
-            const discoveredFlash = available
-                .filter(model => /gemini.*flash/i.test(model) && !configuredModels.includes(model))
-                .slice(0, 2);
-            models = [...new Set([...preferred, ...configuredModels, ...discoveredFlash])];
+            const verified = configuredModels.filter(model => availableSet.has(model));
             logAiEvent('gemini.models', {
+                feature,
                 available: available.length,
-                verified: preferred,
+                verified,
                 order: models
             });
         } catch (error) {
-            logAiEvent('gemini.models-unverified', { reason: error.message });
+            logAiEvent('gemini.models-unverified', {
+                feature,
+                reason: sanitizeErrorMessage(error.message)
+            });
             // Discovery is an optimization only; generation still works when
             // the ListModels endpoint is blocked or temporarily unavailable.
         }
@@ -371,19 +490,30 @@ export async function callGeminiDirect(payload, options = {}) {
 
     for (let modelIndex = 0; modelIndex < models.length; modelIndex++) {
         if (Date.now() >= deadline) {
-            throw new Error('Gemini request timed out. Please check your connection and try again.');
+            throw failWithLog(
+                'Gemini request timed out. Please check your connection and try again.',
+                { feature, reason: 'deadline' }
+            );
         }
 
         const model = models[modelIndex];
         const url = `${GEMINI_CONFIG.apiBase}/models/${model}:generateContent`;
-        const attemptedKeys = new Set();
-        const maxAttempts = Math.max(maxRetries, keys.length - 1);
+        const maxAttempts = maxRetries;
 
         for (let attempt = 0; attempt <= maxAttempts; attempt++) {
             let response;
             const requestStartedAt = Date.now();
+            const remainingMs = deadline - Date.now();
+            if (remainingMs <= 0) {
+                throw failWithLog(
+                    'Gemini request timed out. Please check your connection and try again.',
+                    { feature, model, reason: 'deadline' }
+                );
+            }
+
             const keyNumber = (activeKeyIndex % keys.length) + 1;
             logAiEvent('gemini.request', {
+                feature,
                 model,
                 attempt: attempt + 1,
                 maxAttempts: maxAttempts + 1,
@@ -397,28 +527,41 @@ export async function callGeminiDirect(payload, options = {}) {
                         'x-goog-api-key': keys[activeKeyIndex % keys.length]
                     },
                     body: JSON.stringify(payload)
-                }, Math.min(requestTimeoutMs, Math.max(1000, deadline - Date.now())));
+                }, Math.min(requestTimeoutMs, remainingMs));
             } catch (err) {
                 // Network/TLS/WebView failures are independent of model and
-                // key: retry the same request with bounded backoff.
-                const backoff = backoffDelayMs(attempt);
+                // key: retry the same request with bounded, jittered backoff.
+                const backoff = backoffDelayMs(attempt, random);
+                const reason = err instanceof GeminiTimeoutError ? 'timeout' : 'network';
+                const ms = Date.now() - requestStartedAt;
                 logAiEvent('gemini.network-error', {
+                    feature,
                     model,
                     attempt: attempt + 1,
-                    reason: err instanceof GeminiTimeoutError ? 'timeout' : 'network'
+                    key: keyNumber,
+                    ms,
+                    reason
                 });
                 if (attempt < maxRetries && Date.now() + backoff < deadline) {
-                    logAiEvent('gemini.retry', { model, attempt: attempt + 1, delayMs: backoff });
+                    logAiEvent('gemini.retry', {
+                        feature,
+                        model,
+                        attempt: attempt + 1,
+                        delayMs: backoff,
+                        reason
+                    });
                     await delayFn(backoff);
                     continue;
                 }
                 if (err instanceof GeminiTimeoutError) {
-                    throw new Error(
-                        `${err.message} The AI service may be busy — please try again in a moment.`
+                    throw failWithLog(
+                        `${err.message} The AI service may be busy — please try again in a moment.`,
+                        { feature, model, attempt: attempt + 1, key: keyNumber, ms, reason }
                     );
                 }
-                throw new Error(
-                    'Gemini request failed due to a network error. Check your internet connection and try again.'
+                throw failWithLog(
+                    'Gemini request failed due to a network error. Check your internet connection and try again.',
+                    { feature, model, attempt: attempt + 1, key: keyNumber, ms, reason }
                 );
             }
 
@@ -426,6 +569,7 @@ export async function callGeminiDirect(payload, options = {}) {
                 try {
                     const result = await response.json();
                     logAiEvent('gemini.success', {
+                        feature,
                         model,
                         attempt: attempt + 1,
                         key: keyNumber,
@@ -433,8 +577,17 @@ export async function callGeminiDirect(payload, options = {}) {
                     });
                     return result;
                 } catch {
-                    logAiEvent('gemini.malformed-response', { model });
-                    throw new Error('Gemini returned a malformed response body.');
+                    throw failWithLog(
+                        'Gemini returned a malformed response body.',
+                        {
+                            feature,
+                            model,
+                            attempt: attempt + 1,
+                            key: keyNumber,
+                            ms: Date.now() - requestStartedAt,
+                            reason: 'malformed-response'
+                        }
+                    );
                 }
             }
 
@@ -447,68 +600,88 @@ export async function callGeminiDirect(payload, options = {}) {
             const detail = sanitizeErrorMessage(errorBody?.error?.message);
             const googleStatus = errorBody?.error?.status || '';
 
+            const ms = Date.now() - requestStartedAt;
+
             if (!RETRYABLE_HTTP_STATUSES.has(response.status)) {
-                // Permanent failure: 400 (invalid argument/key), 401/403
+                // Permanent failures: 400 (invalid argument/key), 401/403
                 // (authentication, permission, key restrictions) and 404
-                // (model not found). Never retried; each key is attempted at
-                // most once.
+                // (model not found). Never retried and never key-rotated.
                 logAiEvent('gemini.http-error', {
+                    feature,
                     model,
+                    attempt: attempt + 1,
+                    key: keyNumber,
                     status: response.status,
                     googleStatus,
-                    detail
+                    detail,
+                    ms
                 });
 
                 if (response.status === 404 && modelIndex + 1 < models.length) {
                     logAiEvent('gemini.model-fallback', {
+                        feature,
                         from: model,
                         to: models[modelIndex + 1],
-                        reason: 'HTTP 404'
+                        reason: 'HTTP 404',
+                        attempt: attempt + 1
                     });
                     break; // Try the fallback model instead.
                 }
                 if (response.status === 404) {
-                    throw new Error(
-                        `No Gemini model from the configured list (${models.slice(0, modelIndex + 1).join(', ')}) is available with your API keys (HTTP 404${googleStatus ? `, ${googleStatus}` : ''})${detail ? `: ${detail}` : '.'} The model list can be changed in client/src/services/localGeminiService.js (GEMINI_CONFIG).`
+                    throw failWithLog(
+                        `No Gemini model from the configured list (${models.slice(0, modelIndex + 1).join(', ')}) is available with your API keys (HTTP 404${googleStatus ? `, ${googleStatus}` : ''})${detail ? `: ${detail}` : '.'} The model list can be changed in client/src/services/localGeminiService.js (GEMINI_CONFIG).`,
+                        {
+                            feature,
+                            model,
+                            attempt: attempt + 1,
+                            key: keyNumber,
+                            status: response.status,
+                            ms
+                        }
                     );
                 }
 
-                // Authentication/permission failures are permanent for the
-                // current key. Try each remaining key once (never repeatedly)
-                // so one stale key cannot disable the whole app.
-                attemptedKeys.add(activeKeyIndex % keys.length);
-                if (keys.length > 1 && attemptedKeys.size < keys.length) {
-                    activeKeyIndex = (activeKeyIndex + 1) % keys.length;
-                    logAiEvent('gemini.key-rotate', {
-                        reason: `HTTP ${response.status}`,
-                        nextKey: (activeKeyIndex % keys.length) + 1
-                    });
-                    continue;
-                }
-                throw new Error(
-                    `Gemini request failed (HTTP ${response.status}${googleStatus ? `, ${googleStatus}` : ''})${detail ? `: ${detail}` : '.'}`
+                throw failWithLog(
+                    `Gemini request failed (HTTP ${response.status}${googleStatus ? `, ${googleStatus}` : ''})${detail ? `: ${detail}` : '.'}`,
+                    {
+                        feature,
+                        model,
+                        attempt: attempt + 1,
+                        key: keyNumber,
+                        status: response.status,
+                        googleStatus,
+                        ms
+                    }
                 );
             }
 
             // Temporary failure: 429/5xx. Rotate keys only on quota
             // exhaustion; server-side 5xx uses the same key.
             logAiEvent('gemini.temporary-error', {
+                feature,
                 model,
+                attempt: attempt + 1,
+                key: keyNumber,
                 status: response.status,
                 googleStatus,
-                detail
+                detail,
+                ms
             });
-            if (response.status === 429 && keys.length > 1) {
-                activeKeyIndex = (activeKeyIndex + 1) % keys.length;
-                logAiEvent('gemini.key-rotate', {
-                    reason: 'HTTP 429',
-                    nextKey: (activeKeyIndex % keys.length) + 1
-                });
-            }
             lastDetail = detail || `temporary Gemini error (HTTP ${response.status}${googleStatus ? `, ${googleStatus}` : ''})`;
-            const backoff = backoffDelayMs(attempt);
+            const backoff = backoffDelayMs(attempt, random);
             if (attempt < maxRetries && Date.now() + backoff < deadline) {
+                if (response.status === 429 && keys.length > 1) {
+                    const previousKey = activeKeyIndex % keys.length;
+                    activeKeyIndex = (activeKeyIndex + 1) % keys.length;
+                    logAiEvent('gemini.key-rotate', {
+                        feature,
+                        reason: 'HTTP 429',
+                        fromKey: previousKey + 1,
+                        nextKey: (activeKeyIndex % keys.length) + 1
+                    });
+                }
                 logAiEvent('gemini.retry', {
+                    feature,
                     model,
                     attempt: attempt + 1,
                     status: response.status,
@@ -519,21 +692,32 @@ export async function callGeminiDirect(payload, options = {}) {
             }
             if (response.status >= 500 && modelIndex + 1 < models.length) {
                 logAiEvent('gemini.model-fallback', {
+                    feature,
                     from: model,
                     to: models[modelIndex + 1],
-                    reason: `HTTP ${response.status}`
+                    reason: `HTTP ${response.status}`,
+                    attempt: attempt + 1
                 });
                 break; // Try the next configured model.
             }
-            throw new Error(
-                `Gemini request failed after ${maxRetries + 1} attempts: ${lastDetail}`
+            throw failWithLog(
+                `Gemini request failed after ${maxAttempts + 1} attempts: ${lastDetail}`,
+                {
+                    feature,
+                    model,
+                    attempt: attempt + 1,
+                    key: keyNumber,
+                    status: response.status,
+                    googleStatus,
+                    ms
+                }
             );
         }
     }
 
-    logAiEvent('gemini.failed', { models });
-    throw new Error(
-        `No Gemini model from the configured list (${models.join(', ')}) is available for your API keys (HTTP 404).`
+    throw failWithLog(
+        `No Gemini model from the configured list (${models.join(', ')}) is available for your API keys (HTTP 404).`,
+        { feature, models }
     );
 }
 
@@ -647,7 +831,7 @@ export const localGeminiService = {
         };
 
         logAiEvent('feature.analysis', { month: targetMonth, refresh: Boolean(refresh) });
-        const result = await callGeminiDirect(payload);
+        const result = await callGeminiDirect(payload, { feature: 'analysis' });
         const analysisText = extractGeminiResponseText(result) || 'No response generated';
         logAiEvent('feature.analysis-complete', { month: targetMonth, chars: analysisText.length });
 
@@ -708,7 +892,7 @@ export const localGeminiService = {
 
         // Multi-turn tool execution loop (max 3 turns)
         for (let turn = 0; turn < 3; turn++) {
-            const response = await callGeminiDirect(payload);
+            const response = await callGeminiDirect(payload, { feature: 'chat' });
             const candidate = response?.candidates?.[0];
             const content = candidate?.content;
 
@@ -768,9 +952,7 @@ export const localGeminiService = {
      * Native receipt image OCR via Gemini Vision
      */
     async scanReceiptImage(base64Image, mimeType = 'image/jpeg') {
-        const cleanBase64 = String(base64Image || '')
-            .replace(/^data:image\/[a-zA-Z0-9+.-]+;base64,/, '')
-            .trim();
+        const image = decodeReceiptImage(base64Image, mimeType);
         const categories = await localExpenseService.getCategories();
         const categoryNames = categories.map(c => c.name);
         const validCategories = categoryNames.join(', ') || 'Food, Travel, Rent, Entertainment, Shopping, Utilities, Health, Education, Others';
@@ -809,8 +991,8 @@ CRITICAL: Return ONLY raw JSON without markdown code fences or backticks.`;
                     parts: [
                         {
                             inlineData: {
-                                data: cleanBase64,
-                                mimeType: mimeType || 'image/jpeg'
+                                data: image.data,
+                                mimeType: image.mimeType
                             }
                         },
                         { text: prompt }
@@ -823,19 +1005,62 @@ CRITICAL: Return ONLY raw JSON without markdown code fences or backticks.`;
             }
         };
 
-        logAiEvent('feature.receipt-scan', { mimeType });
-        const result = await callGeminiDirect(payload);
-        const text = extractGeminiResponseText(result) || '{}';
-        const parsed = parseJsonSafely(text, null);
-        const normalized = normalizeReceiptResult(parsed, categoryNames);
+        logAiEvent('feature.receipt-scan', {
+            mimeType: image.mimeType,
+            bytes: image.bytes
+        });
+        const result = await callGeminiDirect(payload, {
+            feature: 'receipt-scan',
+            requireVision: true
+        });
+        const text = extractGeminiResponseText(result).trim();
 
-        if (Array.isArray(parsed?.warnings)) {
-            normalized.warnings.push(
-                ...parsed.warnings
-                    .filter(warning => typeof warning === 'string' && warning.trim())
-                    .map(warning => warning.trim())
+        if (!text) {
+            logAiEvent('feature.receipt-scan-failed', { reason: 'empty-response' });
+            throw new Error(
+                'Gemini did not return any readable receipt data. Please retake the photo or enter the details manually.'
             );
         }
+
+        const parsed = parseJsonSafely(text, null);
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+            logAiEvent('feature.receipt-scan-failed', { reason: 'malformed-response' });
+            throw new Error(
+                'Gemini returned an unreadable receipt response. Please retake the photo or enter the details manually.'
+            );
+        }
+
+        const normalized = normalizeReceiptResult(parsed, categoryNames);
+
+        if (Array.isArray(parsed.warnings)) {
+            const seenWarnings = new Set(
+                normalized.warnings.map(warning => warning.toLowerCase())
+            );
+            for (const warning of parsed.warnings) {
+                if (typeof warning !== 'string' || !warning.trim()) continue;
+                const cleaned = warning.trim();
+                if (seenWarnings.has(cleaned.toLowerCase())) continue;
+                seenWarnings.add(cleaned.toLowerCase());
+                normalized.warnings.push(cleaned);
+            }
+        }
+
+        if (normalized.totalAmount <= 0 && normalized.items.length === 0) {
+            logAiEvent('feature.receipt-scan-failed', {
+                reason: 'no-usable-data',
+                warnings: normalized.warnings.length
+            });
+            throw new Error(
+                'Gemini could not read a usable total or line items from this image. Retake the photo with the total clearly visible, or enter the details manually.'
+            );
+        }
+
+        logAiEvent('feature.receipt-scan-complete', {
+            items: normalized.items.length,
+            hasTotal: normalized.totalAmount > 0,
+            hasDate: Boolean(normalized.billDate),
+            warnings: normalized.warnings.length
+        });
 
         return normalized;
     },
@@ -915,7 +1140,7 @@ CRITICAL: Return ONLY a raw JSON array without markdown code blocks:
                     temperature: 0.1,
                     responseMimeType: 'application/json'
                 }
-            });
+            }, { feature: 'sms-parse' });
 
             const text = extractGeminiResponseText(res) || '[]';
             const parsed = parseJsonSafely(text, []);

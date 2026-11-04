@@ -64,7 +64,7 @@ test('callGeminiDirect sends the key via x-goog-api-key header and never in the 
     assert.deepEqual(result, { candidates: [{ ok: true }] });
 });
 
-test('permanent 400 invalid-key error tries each key once, then surfaces Google message', async () => {
+test('permanent 400 invalid-key error fails immediately without retrying or rotating keys', async () => {
     const urls = [];
     const keys = ['stale-key', 'fresh-key'];
     geminiTestHooks.setActiveKeyIndex(0);
@@ -92,8 +92,8 @@ test('permanent 400 invalid-key error tries each key once, then surfaces Google 
         }
     );
 
-    assert.equal(urls.length, 2, 'each key must be attempted at most once');
-    assert.equal(sawSecondKey, true, 'a stale key must not block the remaining keys');
+    assert.equal(urls.length, 1, '400 must fail immediately');
+    assert.equal(sawSecondKey, false, '400 must never rotate to another key');
     assert.ok(!urls[0].includes('stale-key'), 'API key must never appear in the URL');
 });
 
@@ -225,7 +225,7 @@ test('rate-limit error message is sanitized and never contains key material', as
     );
 });
 
-test('5xx errors retry with bounded exponential backoff, then fall back across models', async () => {
+test('5xx errors retry once with jittered backoff, then fall back across models', async () => {
     const delays = [];
     let fetchCount = 0;
     geminiTestHooks.setActiveKeyIndex(0);
@@ -235,6 +235,7 @@ test('5xx errors retry with bounded exponential backoff, then fall back across m
         callGeminiDirect({}, {
             keys: ['k1'],
             maxRetries: 2,
+            random: () => 0.5,
             delayFn: (ms) => {
                 delays.push(ms);
                 return noopDelay();
@@ -248,17 +249,17 @@ test('5xx errors retry with bounded exponential backoff, then fall back across m
             }
         }),
         (error) => {
-            assert.match(error.message, /after 3 attempts/);
+            assert.match(error.message, /after 2 attempts/);
             assert.match(error.message, /Internal error encountered/);
             return true;
         }
     );
 
-    assert.equal(fetchCount, modelCount * 3, 'each model must be retried before moving on');
+    assert.equal(fetchCount, modelCount * 2, 'each model gets at most two attempts');
     assert.deepEqual(
         delays,
-        Array.from({ length: modelCount }, () => [1000, 2000]).flat(),
-        'bounded exponential backoff must be used for every model'
+        Array.from({ length: modelCount }, () => 750),
+        'bounded jittered backoff must be used for every model'
     );
 });
 
@@ -279,7 +280,7 @@ test('network failures retry the same request and surface a network error', asyn
         /network error/i
     );
 
-    assert.equal(fetchCount, 3, 'network errors must retry, not rotate keys');
+    assert.equal(fetchCount, 2, 'network errors retry once, not rotate keys');
 });
 
 test('GeminiSettingsModal key storage still round-trips via localStorage-compatible API', async () => {
