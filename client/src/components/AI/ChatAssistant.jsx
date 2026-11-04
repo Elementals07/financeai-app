@@ -63,7 +63,9 @@ const ChatAssistant = () => {
 
         try {
             setLiveState('connecting');
-            const activeKey = loadGeminiKeys()[0] || '';
+            const activeKey = loadGeminiKeys()[0]
+                || (typeof import.meta !== 'undefined' && import.meta.env?.VITE_GEMINI_API_KEY)
+                || '';
             const session = new LiveAudioSession({
                 apiKey: activeKey,
                 onStateChange: (state) => {
@@ -104,92 +106,37 @@ const ChatAssistant = () => {
         setInput('');
         setLoading(true);
 
-        // Add empty placeholder assistant message for streaming token updates
+        // Placeholder assistant message while the local AI service runs.
         setMessages(prev => [...prev, { role: 'assistant', content: '' }]);
 
         try {
-            const storedKeys = loadGeminiKeys();
-            const activeKey = storedKeys[0] || '';
-            const headers = { 'Content-Type': 'application/json' };
-            if (activeKey) {
-                headers['x-gemini-key'] = activeKey;
-            }
-
-            const response = await fetch('/api/ai/chat/stream', {
-                method: 'POST',
-                headers,
-                body: JSON.stringify({
-                    message: text,
-                    timeframe: contextTimeframe,
-                    history: messages
-                })
+            // The AI service calls Gemini directly from this device. No
+            // backend/streaming endpoint is required, so the same code path
+            // works in the desktop browser and inside the Capacitor WebView.
+            const res = await API.post('/ai/chat', {
+                message: text,
+                timeframe: contextTimeframe
             });
-
-            if (!response.ok || !response.body) {
-                throw new Error('Streaming unavailable');
+            const reply = res.data?.data?.reply;
+            if (!reply) {
+                throw new Error('The AI returned an empty response. Please try again.');
             }
-
-            const reader = response.body.getReader();
-            const decoder = new TextDecoder();
-            let accumulated = '';
-
-            while (true) {
-                const { done, value } = await reader.read();
-                if (done) break;
-                const chunk = decoder.decode(value, { stream: true });
-                const lines = chunk.split('\n');
-                for (const line of lines) {
-                    if (line.startsWith('data: ')) {
-                        const dataStr = line.slice(6).trim();
-                        if (dataStr === '[DONE]') continue;
-                        try {
-                            const parsed = JSON.parse(dataStr);
-                            if (parsed.text) {
-                                accumulated += parsed.text;
-                                setMessages(prev => {
-                                    const next = [...prev];
-                                    next[next.length - 1] = { role: 'assistant', content: accumulated };
-                                    return next;
-                                });
-                            }
-                        } catch {
-                            // Non-JSON or partial line
-                        }
-                    }
-                }
-            }
-
-            if (!accumulated.trim()) {
-                // Fallback to standard endpoint if stream returned no tokens
-                const res = await API.post('/ai/chat', { message: text, timeframe: contextTimeframe });
-                const reply = res.data?.data?.reply || 'I reviewed your accounts, but could not produce a response.';
-                setMessages(prev => {
-                    const next = [...prev];
-                    next[next.length - 1] = { role: 'assistant', content: reply };
-                    return next;
-                });
-            }
-        } catch {
-            // Graceful fallback to regular POST /ai/chat
-            try {
-                const res = await API.post('/ai/chat', { message: text, timeframe: contextTimeframe });
-                const reply = res.data?.data?.reply || 'I reviewed your accounts, but could not produce a response.';
-                setMessages(prev => {
-                    const next = [...prev];
-                    next[next.length - 1] = { role: 'assistant', content: reply };
-                    return next;
-                });
-            } catch (err) {
-                toast.error(err.response?.data?.message || err.message || 'Failed to get response');
-                setMessages(prev => {
-                    const next = [...prev];
-                    next[next.length - 1] = {
-                        role: 'assistant',
-                        content: 'I encountered an error analyzing your data. Please check your connection or try again.'
-                    };
-                    return next;
-                });
-            }
+            setMessages(prev => {
+                const next = [...prev];
+                next[next.length - 1] = { role: 'assistant', content: reply };
+                return next;
+            });
+        } catch (err) {
+            const message = err.response?.data?.message || err.message || 'Failed to get response';
+            toast.error(message);
+            setMessages(prev => {
+                const next = [...prev];
+                next[next.length - 1] = {
+                    role: 'assistant',
+                    content: `I could not complete that request. ${message}`
+                };
+                return next;
+            });
         } finally {
             setLoading(false);
         }
@@ -220,7 +167,7 @@ const ChatAssistant = () => {
                     </div>
                     <div>
                         <h2 style={{ fontSize: '1rem', fontWeight: 700, margin: 0 }}>Financial Advisor Chat</h2>
-                        <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Server-side streaming & Live voice powered by Gemini 3.8</span>
+                        <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>On-device AI & Live voice powered by Gemini</span>
                     </div>
                 </div>
 
@@ -388,7 +335,7 @@ const ChatAssistant = () => {
                                     ) : (
                                         <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', color: 'var(--text-secondary)' }}>
                                             <div className="spinner" style={{ width: '14px', height: '14px' }} />
-                                            <span style={{ fontSize: '0.85rem' }}>Streaming response...</span>
+                                            <span style={{ fontSize: '0.85rem' }}>Thinking...</span>
                                         </div>
                                     )
                                 )}

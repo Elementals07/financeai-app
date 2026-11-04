@@ -18,22 +18,27 @@ import {
 export const GEMINI_CONFIG = {
     apiBase: 'https://generativelanguage.googleapis.com/v1beta',
     // Stable alias tracking the current Flash model. It supports text,
-    // image input and function calling. Hardcoding an older generation
-    // (e.g. gemini-2.5-flash) fails for new Google projects because Google
-    // restricts 2.5 access to existing users.
+    // image input and function calling.
     model: 'gemini-flash-latest',
-    // Only consulted when the primary model is unavailable to the project
-    // (HTTP 404). gemini-2.5-flash is retained as a safety net for older
-    // Google projects that still serve it.
-    fallbackModels: ['gemini-2.5-flash']
+    // Consulted in order when the primary model is unavailable to the
+    // project (HTTP 404) or repeatedly returns a server-side error (5xx).
+    fallbackModels: [
+        'gemini-3.8-flash',
+        'gemini-2.5-flash',
+        'gemini-2.0-flash'
+    ]
 };
 
 // Temporary failures eligible for bounded exponential backoff. Attrition
 // of quota (429) additionally rotates to the next configured key.
 const RETRYABLE_HTTP_STATUSES = new Set([429, 500, 502, 503, 504]);
 const MAX_BACKOFF_MS = 8000;
+const DEFAULT_REQUEST_TIMEOUT_MS = 30000;
+const DEFAULT_TOTAL_TIMEOUT_MS = 90000;
+const MODEL_CACHE_TTL_MS = 10 * 60 * 1000;
 
 let activeKeyIndex = 0;
+let modelCache = null;
 
 // Test-only hook so simulated tests can pin the rotation start index.
 export const geminiTestHooks = {
@@ -194,53 +199,122 @@ function backoffDelayMs(attempt) {
     return Math.min(1000 * 2 ** attempt, MAX_BACKOFF_MS);
 }
 
+class GeminiTimeoutError extends Error {
+    constructor(timeoutMs) {
+        super(`Gemini request timed out after ${Math.round(timeoutMs / 1000)}s.`);
+        this.name = 'GeminiTimeoutError';
+    }
+}
+
+async function fetchWithTimeout(fetchFn, url, init, timeoutMs) {
+    const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    let timer = null;
+    const timeout = new Promise((_, reject) => {
+        timer = setTimeout(() => {
+            try {
+                controller?.abort();
+            } catch {
+                // Ignore abort failures.
+            }
+            reject(new GeminiTimeoutError(timeoutMs));
+        }, timeoutMs);
+    });
+
+    try {
+        return await Promise.race([
+            fetchFn(url, controller ? { ...init, signal: controller.signal } : init),
+            timeout
+        ]);
+    } finally {
+        if (timer) clearTimeout(timer);
+    }
+}
+
+/**
+ * Pulls the text out of the first Gemini candidate and raises a useful error
+ * when Google blocked or truncated the response. This prevents components
+ * from receiving an empty string and staying in a loading/blank state.
+ */
+export function extractGeminiResponseText(response) {
+    const candidate = response?.candidates?.[0];
+    const parts = candidate?.content?.parts || [];
+    const text = parts.map(part => part?.text || '').join('').trim();
+
+    if (text) return text;
+
+    const blockReason = response?.promptFeedback?.blockReason;
+    if (blockReason) {
+        throw new Error(`Gemini blocked this request (${blockReason}). Try rephrasing it.`);
+    }
+
+    if (candidate?.finishReason === 'SAFETY') {
+        throw new Error('Gemini stopped the response for safety reasons. Try rephrasing your request.');
+    }
+
+    if (candidate?.finishReason === 'MAX_TOKENS') {
+        throw new Error('Gemini reached its output limit before producing an answer. Please try again.');
+    }
+
+    return '';
+}
+
+async function discoverAvailableModels({ keys, fetchFn, timeoutMs }) {
+    if (modelCache && Date.now() - modelCache.at < MODEL_CACHE_TTL_MS) {
+        return modelCache.models;
+    }
+
+    const response = await fetchWithTimeout(
+        fetchFn,
+        `${GEMINI_CONFIG.apiBase}/models?pageSize=200`,
+        {
+            method: 'GET',
+            headers: { 'x-goog-api-key': keys[activeKeyIndex % keys.length] }
+        },
+        timeoutMs
+    );
+
+    if (!response.ok) {
+        throw new Error(`Model discovery failed with HTTP ${response.status}.`);
+    }
+
+    const body = await response.json();
+    const models = (Array.isArray(body?.models) ? body.models : [])
+        .filter(model => Array.isArray(model?.supportedGenerationMethods)
+            && model.supportedGenerationMethods.includes('generateContent'))
+        .map(model => String(model.name || '').replace(/^models\//, ''))
+        .filter(Boolean);
+
+    modelCache = { models, at: Date.now() };
+    return models;
+}
+
 /**
  * Direct Gemini caller with user-supplied keys, bounded exponential backoff
  * and central model configuration. Keys live only in this device's local
  * storage and are never logged, bundled or placed in the request URL.
  *
  * - Authentication uses the documented `x-goog-api-key` header.
- * - Permanent errors (400 invalid key, 401/403 auth or permission,
- *   404 model not available) fail immediately with Google's sanitized
- *   message and never retry or rotate keys.
+ * - Model availability is checked against Google's model list (cached for
+ *   10 minutes) so projects that cannot access an alias automatically use an
+ *   available Flash model instead of failing blindly.
+ * - Permanent errors (400 invalid key, 401/403 auth or permission) fail
+ *   immediately with Google's sanitized message and are never retried.
  * - Temporary errors (429, 5xx) retry with bounded exponential backoff,
- *   rotating to the next key on 429 (quota exhaustion is per key).
- * - 404 for the primary model falls through to the configured fallback
- *   model once, then surfaces a clear error.
+ *   rotating to the next key on 429 (quota exhaustion is per key). Server
+ *   side 5xx errors never rotate keys.
+ * - 404 and repeated 5xx fall through to the next configured model.
+ * - Every request has a timeout and the whole call has a deadline, so callers
+ *   can never hang indefinitely.
  *
  * Test hooks are injected via `options` (keys, fetchImpl, delayFn) so the
  * error-handling matrix can be exercised without network access.
  */
 export async function callGeminiDirect(payload, options = {}) {
-    // When running in the browser, all AI processing is handled by the server
-    if (!options.fetchImpl && typeof window !== 'undefined') {
-        const storedKeys = loadGeminiKeys();
-        const activeKey = storedKeys.length > 0 ? (storedKeys[activeKeyIndex % storedKeys.length] || storedKeys[0]) : '';
 
-        const headers = { 'Content-Type': 'application/json' };
-        if (activeKey) {
-            headers['x-gemini-key'] = activeKey;
-        }
-
-        const response = await fetch('/api/ai/generate', {
-            method: 'POST',
-            headers,
-            body: JSON.stringify(payload)
-        });
-
-        if (!response.ok) {
-            const errData = await response.json().catch(() => ({}));
-            const msg = errData?.error?.message || errData?.message || `AI request failed (HTTP ${response.status})`;
-            if (response.status === 429 && storedKeys.length > 1) {
-                activeKeyIndex = (activeKeyIndex + 1) % storedKeys.length;
-            }
-            throw new Error(msg);
-        }
-
-        return await response.json();
-    }
-
-    const maxRetries = options.maxRetries ?? 4;
+    const maxRetries = options.maxRetries ?? 2;
+    const requestTimeoutMs = options.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
+    const totalTimeoutMs = options.totalTimeoutMs ?? DEFAULT_TOTAL_TIMEOUT_MS;
+    const deadline = Date.now() + totalTimeoutMs;
     const envKey = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_GEMINI_API_KEY) || '';
     const storedKeys = loadGeminiKeys();
     const effectiveKeys = envKey ? [envKey, ...storedKeys.filter(k => k !== envKey)] : storedKeys;
@@ -254,30 +328,66 @@ export async function callGeminiDirect(payload, options = {}) {
         );
     }
 
-    const models = [GEMINI_CONFIG.model, ...GEMINI_CONFIG.fallbackModels];
+    const configuredModels = [GEMINI_CONFIG.model, ...GEMINI_CONFIG.fallbackModels];
+    let models = configuredModels;
+
+    // Verify model availability on real (network) calls. Tests that inject a
+    // fetch implementation skip discovery unless explicitly requested.
+    const shouldDiscover = options.discoverModels ?? !options.fetchImpl;
+    if (shouldDiscover) {
+        try {
+            const available = await discoverAvailableModels({
+                keys,
+                fetchFn,
+                timeoutMs: Math.min(requestTimeoutMs, Math.max(2000, deadline - Date.now()))
+            });
+            const availableSet = new Set(available);
+            const preferred = configuredModels.filter(model => availableSet.has(model));
+            const discoveredFlash = available
+                .filter(model => /gemini.*flash/i.test(model) && !configuredModels.includes(model))
+                .slice(0, 2);
+            models = [...new Set([...preferred, ...configuredModels, ...discoveredFlash])];
+        } catch {
+            // Discovery is an optimization only; generation still works when
+            // the ListModels endpoint is blocked or temporarily unavailable.
+        }
+    }
+
     let lastDetail = '';
 
     for (let modelIndex = 0; modelIndex < models.length; modelIndex++) {
+        if (Date.now() >= deadline) {
+            throw new Error('Gemini request timed out. Please check your connection and try again.');
+        }
+
         const model = models[modelIndex];
         const url = `${GEMINI_CONFIG.apiBase}/models/${model}:generateContent`;
+        const attemptedKeys = new Set();
+        const maxAttempts = Math.max(maxRetries, keys.length - 1);
 
-        for (let attempt = 0; attempt <= maxRetries; attempt++) {
+        for (let attempt = 0; attempt <= maxAttempts; attempt++) {
             let response;
             try {
-                response = await fetchFn(url, {
+                response = await fetchWithTimeout(fetchFn, url, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
                         'x-goog-api-key': keys[activeKeyIndex % keys.length]
                     },
                     body: JSON.stringify(payload)
-                });
-            } catch {
+                }, Math.min(requestTimeoutMs, Math.max(1000, deadline - Date.now())));
+            } catch (err) {
                 // Network/TLS/WebView failures are independent of model and
                 // key: retry the same request with bounded backoff.
-                if (attempt < maxRetries) {
-                    await delayFn(backoffDelayMs(attempt));
+                const backoff = backoffDelayMs(attempt);
+                if (attempt < maxRetries && Date.now() + backoff < deadline) {
+                    await delayFn(backoff);
                     continue;
+                }
+                if (err instanceof GeminiTimeoutError) {
+                    throw new Error(
+                        `${err.message} The AI service may be busy — please try again in a moment.`
+                    );
                 }
                 throw new Error(
                     'Gemini request failed due to a network error. Check your internet connection and try again.'
@@ -314,20 +424,33 @@ export async function callGeminiDirect(payload, options = {}) {
                         `No Gemini model from the configured list (${models.slice(0, modelIndex + 1).join(', ')}) is available with your API keys (HTTP 404${googleStatus ? `, ${googleStatus}` : ''})${detail ? `: ${detail}` : '.'} The model list can be changed in client/src/services/localGeminiService.js (GEMINI_CONFIG).`
                     );
                 }
+
+                // Authentication/permission failures are permanent for the
+                // current key. Try each remaining key once (never repeatedly)
+                // so one stale key cannot disable the whole app.
+                attemptedKeys.add(activeKeyIndex % keys.length);
+                if (keys.length > 1 && attemptedKeys.size < keys.length) {
+                    activeKeyIndex = (activeKeyIndex + 1) % keys.length;
+                    continue;
+                }
                 throw new Error(
                     `Gemini request failed (HTTP ${response.status}${googleStatus ? `, ${googleStatus}` : ''})${detail ? `: ${detail}` : '.'}`
                 );
             }
 
             // Temporary failure: 429/5xx. Rotate keys only on quota
-            // exhaustion, then back off and retry the same model.
+            // exhaustion; server-side 5xx uses the same key.
             if (response.status === 429 && keys.length > 1) {
                 activeKeyIndex = (activeKeyIndex + 1) % keys.length;
             }
             lastDetail = detail || `temporary Gemini error (HTTP ${response.status}${googleStatus ? `, ${googleStatus}` : ''})`;
-            if (attempt < maxRetries) {
-                await delayFn(backoffDelayMs(attempt));
+            const backoff = backoffDelayMs(attempt);
+            if (attempt < maxRetries && Date.now() + backoff < deadline) {
+                await delayFn(backoff);
                 continue;
+            }
+            if (response.status >= 500 && modelIndex + 1 < models.length) {
+                break; // Try the next configured model.
             }
             throw new Error(
                 `Gemini request failed after ${maxRetries + 1} attempts: ${lastDetail}`
@@ -450,7 +573,7 @@ export const localGeminiService = {
         };
 
         const result = await callGeminiDirect(payload);
-        const analysisText = result?.candidates?.[0]?.content?.parts?.[0]?.text || 'No response generated';
+        const analysisText = extractGeminiResponseText(result) || 'No response generated';
 
         // Cache for 24 hours
         await db.ai_insights_cache.put({
@@ -516,7 +639,8 @@ export const localGeminiService = {
             const functionCalls = content.parts?.filter(p => p.functionCall);
 
             if (!functionCalls || functionCalls.length === 0) {
-                const replyText = content.parts?.find(p => p.text)?.text || 'I checked your accounts, but could not produce a response.';
+                const replyText = extractGeminiResponseText(response)
+                    || 'I checked your accounts, but could not produce a response.';
                 return {
                     reply: replyText,
                     cached: false,
@@ -622,7 +746,7 @@ CRITICAL: Return ONLY raw JSON without markdown code fences or backticks.`;
         };
 
         const result = await callGeminiDirect(payload);
-        const text = result?.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
+        const text = extractGeminiResponseText(result) || '{}';
         const parsed = parseJsonSafely(text, null);
         const normalized = normalizeReceiptResult(parsed, categoryNames);
 
@@ -712,7 +836,7 @@ CRITICAL: Return ONLY a raw JSON array without markdown code blocks:
                 }
             });
 
-            const text = res?.candidates?.[0]?.content?.parts?.[0]?.text || '[]';
+            const text = extractGeminiResponseText(res) || '[]';
             const parsed = parseJsonSafely(text, []);
             normalized.push(...normalizeSmsParse(parsed, chunk, categoryNames));
         }

@@ -1,7 +1,8 @@
 /**
  * Standalone Local API Adapter
  * Financial data is routed on-device through Dexie (IndexedDB). AI requests are
- * orchestrated locally but sent to the FinanceAI AI proxy, which holds the keys.
+ * executed locally and sent directly from this device to the Gemini API using
+ * the keys stored in local storage.
  */
 import { localExpenseService } from '../services/localExpenseService';
 import { localGeminiService } from '../services/localGeminiService';

@@ -33,10 +33,12 @@ const AnalysisPanel = () => {
             const res = await API.post('/ai/analyze', {
                 refresh: forceRefresh
             });
-            if (res.data?.data) {
-                setAnalysis(res.data.data.analysis);
-                setSignal(res.data.data.healthSignal || 'green');
+            const data = res.data?.data;
+            if (!data?.analysis) {
+                throw new Error('The AI returned an empty analysis. Please try again.');
             }
+            setAnalysis(data.analysis);
+            setSignal(data.healthSignal || 'green');
         } catch (err) {
             setError(err.response?.data?.message || err.message || 'Could not load analysis. Please check your data or try again.');
         } finally {
@@ -107,7 +109,7 @@ const AnalysisPanel = () => {
                         <div className="empty-state-icon">⚠️</div>
                         <h3>Diagnosis Unavailable</h3>
                         <p>{error}</p>
-                        <button type="button" className="btn btn-primary btn-sm" onClick={() => fetchAnalysis(timeframe)}>
+                        <button type="button" className="btn btn-primary btn-sm" onClick={() => fetchAnalysis(false)}>
                             Try Again
                         </button>
                     </div>
@@ -128,7 +130,7 @@ const AnalysisPanel = () => {
                         <div className="empty-state-icon">💡</div>
                         <h3>No Analysis Generated Yet</h3>
                         <p>Click below to generate an AI assessment of your spending and receive personalized next steps.</p>
-                        <button type="button" className="btn btn-primary" onClick={() => fetchAnalysis(timeframe, true)}>
+                        <button type="button" className="btn btn-primary" onClick={() => fetchAnalysis(true)}>
                             Generate Diagnosis
                         </button>
                     </div>

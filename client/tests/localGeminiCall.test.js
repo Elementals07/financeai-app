@@ -64,7 +64,7 @@ test('callGeminiDirect sends the key via x-goog-api-key header and never in the 
     assert.deepEqual(result, { candidates: [{ ok: true }] });
 });
 
-test('permanent 400 invalid-key error surfaces Google message without retry or rotation', async () => {
+test('permanent 400 invalid-key error tries each key once, then surfaces Google message', async () => {
     const urls = [];
     const keys = ['stale-key', 'fresh-key'];
     geminiTestHooks.setActiveKeyIndex(0);
@@ -92,8 +92,8 @@ test('permanent 400 invalid-key error surfaces Google message without retry or r
         }
     );
 
-    assert.equal(urls.length, 1, 'permanent errors must not be retried');
-    assert.equal(sawSecondKey, false, 'permanent errors must not rotate keys');
+    assert.equal(urls.length, 2, 'each key must be attempted at most once');
+    assert.equal(sawSecondKey, true, 'a stale key must not block the remaining keys');
     assert.ok(!urls[0].includes('stale-key'), 'API key must never appear in the URL');
 });
 
@@ -225,10 +225,11 @@ test('rate-limit error message is sanitized and never contains key material', as
     );
 });
 
-test('5xx errors retry with bounded exponential backoff before failing', async () => {
+test('5xx errors retry with bounded exponential backoff, then fall back across models', async () => {
     const delays = [];
     let fetchCount = 0;
     geminiTestHooks.setActiveKeyIndex(0);
+    const modelCount = 1 + GEMINI_CONFIG.fallbackModels.length;
 
     await assert.rejects(
         callGeminiDirect({}, {
@@ -253,8 +254,12 @@ test('5xx errors retry with bounded exponential backoff before failing', async (
         }
     );
 
-    assert.equal(fetchCount, 3);
-    assert.deepEqual(delays, [1000, 2000], 'bounded exponential backoff must be used');
+    assert.equal(fetchCount, modelCount * 3, 'each model must be retried before moving on');
+    assert.deepEqual(
+        delays,
+        Array.from({ length: modelCount }, () => [1000, 2000]).flat(),
+        'bounded exponential backoff must be used for every model'
+    );
 });
 
 test('network failures retry the same request and surface a network error', async () => {

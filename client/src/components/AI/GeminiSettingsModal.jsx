@@ -85,17 +85,9 @@ const GeminiSettingsModal = ({ onClose, onSaved }) => {
         setSaving(true);
         try {
             const saved = saveGeminiKeys(keys);
-            // Sync with server
-            if (saved.length > 0) {
-                await fetch('/api/ai/configure-key', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ key: saved[0], keys: saved })
-                }).catch(() => {});
-            }
 
             onSaved?.(saved);
-            toast.success(saved.length ? `Saved ${saved.length} Gemini key${saved.length === 1 ? '' : 's'}. Server AI is ready!` : 'Gemini keys cleared.');
+            toast.success(saved.length ? `Saved ${saved.length} Gemini key${saved.length === 1 ? '' : 's'} on this device.` : 'Gemini keys cleared.');
             onClose();
         } catch (error) {
             toast.error(error.message || 'Could not save Gemini keys.');
@@ -109,11 +101,6 @@ const GeminiSettingsModal = ({ onClose, onSaved }) => {
         try {
             clearGeminiKeys();
             setInputs(emptyInputs());
-            await fetch('/api/ai/configure-key', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ key: '', keys: [] })
-            }).catch(() => {});
             onSaved?.([]);
             toast.success('Gemini keys removed.');
             onClose();
@@ -140,7 +127,7 @@ const GeminiSettingsModal = ({ onClose, onSaved }) => {
                             AI Settings & Gemini API Keys
                         </h2>
                         <p style={{ margin: '0.25rem 0 0', color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
-                            Add your Gemini API key for server-side financial advice, receipt scanning, and live voice.
+                            Add your Gemini API key for on-device financial advice, receipt scanning, and live voice.
                         </p>
                     </div>
                     <button
@@ -175,7 +162,7 @@ const GeminiSettingsModal = ({ onClose, onSaved }) => {
                             }}
                         />
                         <p style={{ margin: 0, fontSize: '0.83rem', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
-                            All AI calls execute server-side through Google Gemini 3.8 Flash and Live API. Add up to {MAX_GEMINI_KEYS} keys for automatic rotation and high availability.
+                            Keys are stored only in this device's local storage. All AI calls go directly from this device to Google Gemini. Add up to {MAX_GEMINI_KEYS} keys for automatic rotation and high availability.
                         </p>
                     </div>
 
