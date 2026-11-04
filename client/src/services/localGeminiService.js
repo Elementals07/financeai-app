@@ -1,6 +1,7 @@
 import { db } from './localDatabase.js';
 import { localExpenseService } from './localExpenseService.js';
 import { loadGeminiKeys } from './geminiKeys.js';
+import { logAiEvent } from './aiLogger.js';
 import {
     dateToLocalYmd,
     isExcludedSmsBody,
@@ -167,6 +168,7 @@ const TOOL_DEFINITIONS = [
 ];
 
 async function executeLocalTool(toolName, args) {
+    logAiEvent('chat.tool-call', { tool: toolName, args });
     switch (toolName) {
         case 'get_period_summary':
             return await localExpenseService.getPeriodSummary(args.startMonth, args.endMonth);
@@ -331,6 +333,12 @@ export async function callGeminiDirect(payload, options = {}) {
     const configuredModels = [GEMINI_CONFIG.model, ...GEMINI_CONFIG.fallbackModels];
     let models = configuredModels;
 
+    logAiEvent('gemini.start', {
+        keys: keys.length,
+        primaryModel: GEMINI_CONFIG.model,
+        fallbacks: GEMINI_CONFIG.fallbackModels
+    });
+
     // Verify model availability on real (network) calls. Tests that inject a
     // fetch implementation skip discovery unless explicitly requested.
     const shouldDiscover = options.discoverModels ?? !options.fetchImpl;
@@ -347,7 +355,13 @@ export async function callGeminiDirect(payload, options = {}) {
                 .filter(model => /gemini.*flash/i.test(model) && !configuredModels.includes(model))
                 .slice(0, 2);
             models = [...new Set([...preferred, ...configuredModels, ...discoveredFlash])];
-        } catch {
+            logAiEvent('gemini.models', {
+                available: available.length,
+                verified: preferred,
+                order: models
+            });
+        } catch (error) {
+            logAiEvent('gemini.models-unverified', { reason: error.message });
             // Discovery is an optimization only; generation still works when
             // the ListModels endpoint is blocked or temporarily unavailable.
         }
@@ -367,6 +381,14 @@ export async function callGeminiDirect(payload, options = {}) {
 
         for (let attempt = 0; attempt <= maxAttempts; attempt++) {
             let response;
+            const requestStartedAt = Date.now();
+            const keyNumber = (activeKeyIndex % keys.length) + 1;
+            logAiEvent('gemini.request', {
+                model,
+                attempt: attempt + 1,
+                maxAttempts: maxAttempts + 1,
+                key: keyNumber
+            });
             try {
                 response = await fetchWithTimeout(fetchFn, url, {
                     method: 'POST',
@@ -380,7 +402,13 @@ export async function callGeminiDirect(payload, options = {}) {
                 // Network/TLS/WebView failures are independent of model and
                 // key: retry the same request with bounded backoff.
                 const backoff = backoffDelayMs(attempt);
+                logAiEvent('gemini.network-error', {
+                    model,
+                    attempt: attempt + 1,
+                    reason: err instanceof GeminiTimeoutError ? 'timeout' : 'network'
+                });
                 if (attempt < maxRetries && Date.now() + backoff < deadline) {
+                    logAiEvent('gemini.retry', { model, attempt: attempt + 1, delayMs: backoff });
                     await delayFn(backoff);
                     continue;
                 }
@@ -396,8 +424,16 @@ export async function callGeminiDirect(payload, options = {}) {
 
             if (response.ok) {
                 try {
-                    return await response.json();
+                    const result = await response.json();
+                    logAiEvent('gemini.success', {
+                        model,
+                        attempt: attempt + 1,
+                        key: keyNumber,
+                        ms: Date.now() - requestStartedAt
+                    });
+                    return result;
                 } catch {
+                    logAiEvent('gemini.malformed-response', { model });
                     throw new Error('Gemini returned a malformed response body.');
                 }
             }
@@ -414,9 +450,21 @@ export async function callGeminiDirect(payload, options = {}) {
             if (!RETRYABLE_HTTP_STATUSES.has(response.status)) {
                 // Permanent failure: 400 (invalid argument/key), 401/403
                 // (authentication, permission, key restrictions) and 404
-                // (model not found). Never retried; keys are not rotated
-                // because the response is not key-quota related.
+                // (model not found). Never retried; each key is attempted at
+                // most once.
+                logAiEvent('gemini.http-error', {
+                    model,
+                    status: response.status,
+                    googleStatus,
+                    detail
+                });
+
                 if (response.status === 404 && modelIndex + 1 < models.length) {
+                    logAiEvent('gemini.model-fallback', {
+                        from: model,
+                        to: models[modelIndex + 1],
+                        reason: 'HTTP 404'
+                    });
                     break; // Try the fallback model instead.
                 }
                 if (response.status === 404) {
@@ -431,6 +479,10 @@ export async function callGeminiDirect(payload, options = {}) {
                 attemptedKeys.add(activeKeyIndex % keys.length);
                 if (keys.length > 1 && attemptedKeys.size < keys.length) {
                     activeKeyIndex = (activeKeyIndex + 1) % keys.length;
+                    logAiEvent('gemini.key-rotate', {
+                        reason: `HTTP ${response.status}`,
+                        nextKey: (activeKeyIndex % keys.length) + 1
+                    });
                     continue;
                 }
                 throw new Error(
@@ -440,16 +492,37 @@ export async function callGeminiDirect(payload, options = {}) {
 
             // Temporary failure: 429/5xx. Rotate keys only on quota
             // exhaustion; server-side 5xx uses the same key.
+            logAiEvent('gemini.temporary-error', {
+                model,
+                status: response.status,
+                googleStatus,
+                detail
+            });
             if (response.status === 429 && keys.length > 1) {
                 activeKeyIndex = (activeKeyIndex + 1) % keys.length;
+                logAiEvent('gemini.key-rotate', {
+                    reason: 'HTTP 429',
+                    nextKey: (activeKeyIndex % keys.length) + 1
+                });
             }
             lastDetail = detail || `temporary Gemini error (HTTP ${response.status}${googleStatus ? `, ${googleStatus}` : ''})`;
             const backoff = backoffDelayMs(attempt);
             if (attempt < maxRetries && Date.now() + backoff < deadline) {
+                logAiEvent('gemini.retry', {
+                    model,
+                    attempt: attempt + 1,
+                    status: response.status,
+                    delayMs: backoff
+                });
                 await delayFn(backoff);
                 continue;
             }
             if (response.status >= 500 && modelIndex + 1 < models.length) {
+                logAiEvent('gemini.model-fallback', {
+                    from: model,
+                    to: models[modelIndex + 1],
+                    reason: `HTTP ${response.status}`
+                });
                 break; // Try the next configured model.
             }
             throw new Error(
@@ -458,6 +531,7 @@ export async function callGeminiDirect(payload, options = {}) {
         }
     }
 
+    logAiEvent('gemini.failed', { models });
     throw new Error(
         `No Gemini model from the configured list (${models.join(', ')}) is available for your API keys (HTTP 404).`
     );
@@ -572,8 +646,10 @@ export const localGeminiService = {
             }
         };
 
+        logAiEvent('feature.analysis', { month: targetMonth, refresh: Boolean(refresh) });
         const result = await callGeminiDirect(payload);
         const analysisText = extractGeminiResponseText(result) || 'No response generated';
+        logAiEvent('feature.analysis-complete', { month: targetMonth, chars: analysisText.length });
 
         // Cache for 24 hours
         await db.ai_insights_cache.put({
@@ -627,6 +703,8 @@ export const localGeminiService = {
                 maxOutputTokens: 2048
             }
         };
+
+        logAiEvent('feature.chat', { timeframe, chars: String(userMessage || '').length });
 
         // Multi-turn tool execution loop (max 3 turns)
         for (let turn = 0; turn < 3; turn++) {
@@ -745,6 +823,7 @@ CRITICAL: Return ONLY raw JSON without markdown code fences or backticks.`;
             }
         };
 
+        logAiEvent('feature.receipt-scan', { mimeType });
         const result = await callGeminiDirect(payload);
         const text = extractGeminiResponseText(result) || '{}';
         const parsed = parseJsonSafely(text, null);
@@ -810,6 +889,8 @@ CRITICAL: Return ONLY a raw JSON array without markdown code blocks:
 [
   { "smsId": "...", "merchant": "...", "amount": 100, "date": "YYYY-MM-DD", "category": "...", "type": "debit", "confidence": 0.9, "uncertain": false }
 ]`;
+
+        logAiEvent('feature.sms-parse', { messages: candidates.length });
 
         const CHUNK_SIZE = 15;
         const normalized = [];

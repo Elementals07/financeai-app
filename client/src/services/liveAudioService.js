@@ -7,6 +7,8 @@
  * Android WebView and therefore cannot reach a development server.
  */
 
+import { logAiEvent } from './aiLogger.js';
+
 const LIVE_WS_ENDPOINT = 'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent';
 const LIVE_MODELS = [
   'gemini-3.8-live',
@@ -118,23 +120,28 @@ export class LiveAudioSession {
 
     this.cancelled = false;
     this.onStateChange('connecting');
+    logAiEvent('live.start', { models: LIVE_MODELS });
 
     try {
       await this.openMicrophone();
+      logAiEvent('live.microphone-ready');
       if (this.cancelled) throw new Error('Live voice session cancelled.');
 
       let lastError = null;
       for (const model of LIVE_MODELS) {
         if (this.cancelled) throw new Error('Live voice session cancelled.');
         try {
+          logAiEvent('live.connect', { model });
           await this.connectModel(model);
           this.activeModel = model;
           this.connected = true;
           this.startAudioStream();
+          logAiEvent('live.connected', { model });
           this.onStateChange('active');
           return;
         } catch (err) {
           lastError = err;
+          logAiEvent('live.connect-failed', { model, reason: err.message });
         }
       }
 
@@ -322,6 +329,7 @@ export class LiveAudioSession {
   handleServerMessage(message) {
     if (message?.error) {
       const error = new Error(sanitizeLiveError(message.error.message) || 'Live voice session error.');
+      logAiEvent('live.server-error', { reason: error.message });
       this.onError(error);
       this.onMessage({ error: error.message });
       return;
@@ -449,6 +457,7 @@ export class LiveAudioSession {
 
   stop() {
     this.cancelled = true;
+    logAiEvent('live.stop', { model: this.activeModel });
     this.stopPlayback();
 
     const rejectPending = this.pendingReject;
