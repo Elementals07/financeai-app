@@ -4,12 +4,14 @@ import {
     HiOutlinePaperAirplane,
     HiOutlineSparkles,
     HiOutlineMicrophone,
-    HiOutlineStop
+    HiOutlineStop,
+    HiOutlineExclamationTriangle
 } from 'react-icons/hi2';
 import toast from 'react-hot-toast';
 import { AdvisorMarkdown } from '../../utils/advisorFormatter';
 import { LiveAudioSession } from '../../services/liveAudioService';
 import { loadGeminiKeys } from '../../services/geminiKeys';
+import { getAIProviderStatus, subscribeAIProviderSettings } from '../../services/ai/providerSettings';
 
 const SUGGESTED_QUESTIONS = [
     "Where did my money go?",
@@ -31,9 +33,14 @@ const ChatAssistant = () => {
     const [loading, setLoading] = useState(false);
     const [liveState, setLiveState] = useState('idle'); // idle | connecting | active
     const [liveTranscript, setLiveTranscript] = useState('');
+    const [providerStatus, setProviderStatus] = useState(() => getAIProviderStatus());
 
     const messagesEndRef = useRef(null);
     const liveSessionRef = useRef(null);
+
+    useEffect(() => subscribeAIProviderSettings(setProviderStatus), []);
+
+    const geminiAvailable = providerStatus.gemini.enabled && providerStatus.gemini.configured;
 
     // Auto-scroll to bottom of chat
     useEffect(() => {
@@ -58,6 +65,15 @@ const ChatAssistant = () => {
             setLiveState('idle');
             setLiveTranscript('');
             toast.success('Live voice session ended');
+            return;
+        }
+
+        if (!providerStatus.gemini.enabled) {
+            toast.error('Live Voice requires Google Gemini. Enable Gemini in AI Settings in the sidebar.');
+            return;
+        }
+        if (!providerStatus.gemini.configured) {
+            toast.error('Live Voice requires a Gemini API key. Add one in AI Settings in the sidebar.');
             return;
         }
 
@@ -102,6 +118,16 @@ const ChatAssistant = () => {
         if (!text || loading) return;
 
         const userMsg = { role: 'user', content: text };
+        // Keep a short rolling window of prior turns so follow-up questions
+        // like "and last month?" resolve correctly. The greeting and empty
+        // placeholders are excluded.
+        const conversationHistory = messages
+            .filter(message => message.content
+                && !(message.role === 'assistant'
+                    && message.content.startsWith('Hello! I am your AI Financial Advisor')))
+            .slice(-10)
+            .map(message => ({ role: message.role, content: message.content }));
+
         setMessages(prev => [...prev, userMsg]);
         setInput('');
         setLoading(true);
@@ -115,7 +141,8 @@ const ChatAssistant = () => {
             // works in the desktop browser and inside the Capacitor WebView.
             const res = await API.post('/ai/chat', {
                 message: text,
-                timeframe: contextTimeframe
+                timeframe: contextTimeframe,
+                history: conversationHistory
             });
             const reply = res.data?.data?.reply;
             if (!reply) {
@@ -167,7 +194,9 @@ const ChatAssistant = () => {
                     </div>
                     <div>
                         <h2 style={{ fontSize: '1rem', fontWeight: 700, margin: 0 }}>Financial Advisor Chat</h2>
-                        <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>On-device AI & Live voice powered by Gemini</span>
+                        <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                            Text advisor: {providerStatus.activeProviderLabel || 'not configured'} · Live Voice: Gemini
+                        </span>
                     </div>
                 </div>
 

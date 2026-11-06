@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import GeminiSettingsModal from '../AI/GeminiSettingsModal';
-import { getGeminiKeyCount, MAX_GEMINI_KEYS } from '../../services/geminiKeys';
+import { getAIProviderStatus, subscribeAIProviderSettings } from '../../services/ai/providerSettings';
 import { 
     HiOutlineHome, 
     HiOutlineCreditCard, 
@@ -21,7 +21,9 @@ const Sidebar = ({ mobileOpen, onCloseMobile }) => {
     const { user, logout } = useAuth();
     const navigate = useNavigate();
     const [settingsOpen, setSettingsOpen] = useState(false);
-    const [keyCount, setKeyCount] = useState(() => getGeminiKeyCount());
+    const [aiStatus, setAiStatus] = useState(() => getAIProviderStatus());
+
+    useEffect(() => subscribeAIProviderSettings(setAiStatus), []);
 
     // Default to open (not collapsed) on desktop as per UX guidelines
     const [collapsed, setCollapsed] = useState(() => {
@@ -87,6 +89,15 @@ const Sidebar = ({ mobileOpen, onCloseMobile }) => {
             ]
         },
     ];
+
+    const activeShort = aiStatus.activeProvider === 'velona'
+        ? 'Velona'
+        : aiStatus.activeProvider === 'gemini'
+            ? 'Gemini'
+            : 'Set up';
+    const activeColor = aiStatus.activeProvider
+        ? 'var(--color-success, #047857)'
+        : 'var(--color-danger)';
 
     return (
         <>
@@ -159,7 +170,7 @@ const Sidebar = ({ mobileOpen, onCloseMobile }) => {
                         className="nav-item"
                         onClick={handleOpenSettings}
                         title={collapsed ? 'AI Settings' : undefined}
-                        aria-label={`AI Settings, ${keyCount} of ${MAX_GEMINI_KEYS} keys configured`}
+                        aria-label={`AI Settings, active provider ${aiStatus.activeProviderLabel || 'not configured'}`}
                         aria-haspopup="dialog"
                         aria-expanded={settingsOpen}
                         style={{
@@ -177,12 +188,13 @@ const Sidebar = ({ mobileOpen, onCloseMobile }) => {
                                 <span
                                     style={{
                                         marginLeft: 'auto',
-                                        fontSize: '0.75rem',
-                                        fontWeight: 600,
-                                        color: keyCount > 0 ? 'var(--color-primary)' : 'var(--color-danger)'
+                                        fontSize: '0.72rem',
+                                        fontWeight: 700,
+                                        color: activeColor
                                     }}
+                                    title={aiStatus.unavailableMessage || `Active provider: ${aiStatus.activeProviderLabel || 'none'}`}
                                 >
-                                    {keyCount}/{MAX_GEMINI_KEYS}
+                                    {activeShort}
                                 </span>
                             </>
                         )}
@@ -232,7 +244,7 @@ const Sidebar = ({ mobileOpen, onCloseMobile }) => {
         {settingsOpen && (
             <GeminiSettingsModal
                 onClose={() => setSettingsOpen(false)}
-                onSaved={(keys) => setKeyCount(keys.length)}
+                onChanged={(next) => setAiStatus(next || getAIProviderStatus())}
             />
         )}
         </>
